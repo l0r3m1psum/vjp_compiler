@@ -13,13 +13,14 @@ typedef enum Kind {
 	KIND_VAR,
 	KIND_ADD,
 	KIND_MUL,
-	KIND_DER,
+	KIND_TRANS,
 } Kind;
 #define KIND_COUNT 6
 #define CHECK_KIND(n) static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
-// The lower the number the higher the precedence.
+// The lower the number the higher the precedence (think of it as first, second,
+// third, ...)
 CHECK_KIND(6);
 int kind_precedence[KIND_COUNT] = {
 	[KIND_NULL] = 0,
@@ -27,7 +28,7 @@ int kind_precedence[KIND_COUNT] = {
 	[KIND_VAR] = 0,
 	[KIND_ADD] = 3,
 	[KIND_MUL] = 2,
-	[KIND_DER] = 1
+	[KIND_TRANS] = 1,
 };
 
 typedef uint16_t ExprHandle;
@@ -36,10 +37,11 @@ typedef uint16_t ExprHandle;
 
 // NOTE: For debuging it would be better to have a string instead of a single
 // character, also probably generating names automatically linke A000, A001,
-// ecc... Would make things more ergonomic .
+// ecc... Would make things more ergonomic.
 typedef struct ExprNode {
 	Kind kind;
 	char name;
+	bool req_grad;
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -66,8 +68,8 @@ expr_char(ExprHandle handle) {
 		return '+';
 	case KIND_MUL:
 		return '*';
-	case KIND_DER:
-		return 'd';
+	case KIND_TRANS:
+		return '\'';
 	}
 	__assume(0);
 }
@@ -110,7 +112,7 @@ expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 	ExprHandle res = node_pool_watermark++;
 	node_pool[res] = (ExprNode) {
 		.kind = kind,
-		.name = name
+		.name = name,
 		.arg0 = arg0,
 		.arg1 = arg1,
 	};
@@ -127,65 +129,59 @@ expr_make_operand(Kind kind, char name) {
 
 static ExprHandle
 expr_make_operator(Kind kind, ExprHandle arg0, ...) {
-	if (kind != KIND_ADD && kind != KIND_MUL && kind != KIND_DER) {
+	if (kind != KIND_ADD && kind != KIND_MUL && kind != KIND_TRANS) {
 		return HANDLE_NULL;
 	}
 	ExprHandle arg1 = HANDLE_NULL;
-	if (kind != KIND_DER) {
+	if (kind != KIND_TRANS) {
 		va_list args;
 		va_start(args, arg0);
 		arg1 = va_arg(args, ExprHandle);
 		va_end(args);
-	} else {
-		// This is done to make the print function work seamlessly. If you think
-		// of arg0 as the lhs and arg1 as the rhs of a binary operator then we
-		// want the differential to only have an argument on the rhs.
-		SWAP(ExprHandle, arg0, arg1);
-		// NOTE: for the transpose it will be the opposite.
 	}
+	// To make the print function work seamlessly with the transpose think of
+	// arg0 as the lhs and arg1 as the rhs of a binary operator, then the
+	// transpose only has a left argument. For other unary operators you can
+	// just swap arg0 and arg1.
 	return expr_make_node(kind, '\0', arg0, arg1);
 }
 
-// avere il differenziale come operatore non ha senso siccome l'unica cosa che
-// mi interessa è di propagarlo applicando ricorsivamente la funzione...
-// FIXME: eliminare il differenziale come operatore!
-static ExprHandle
-expr_push_differntial(ExprHandle handle) {
-
+// 1. traverse the tree to understand which branches require the gradient.
+// 2. immagine that you are applying the differential to the expression,
+//    starting from the top and goint to the bottom.
+static void
+expr_set_req_grad(ExprHandle handle) {
 	ExprNode *node = expr_get_node(handle);
-	if (node->kind != KIND_NULL) {
-		return HANDLE_NULL;
-	}
-	if (node->kind != KIND_DER) {
-		ExprHandle arg0_der = expr_push_differntial(node->arg0);
-		ExprHandle arg1_der = expr_push_differntial(node->arg1);
-		expr_make_node(node->kind, node->name, arg0_der, arg1_der);
-	}
-
-	// NOTE: una cosa che potrebbe semplificarmi la vita è prima attraversare
-	// l'albero e poi marcare certi nodi come "requires_gradient".
-	if (node->kind == KIND_CONST) {
-		// a questo punto ho uno zero e lo devo propagare lungo tutta una catena
-		// di moltiplicazioni...
+	if (node->kind == KIND_NULL) {
+		return;
 	}
 	if (node->kind == KIND_VAR) {
-		return expr_make_operator(
-			KIND_DER,
-			expr_make_operand(KIND_VAR, node->name)
-		);
+		node->req_grad = true;
+		return;
 	}
-	if (node->kind == KIND_ADD) {
-		// Qua devo ritornare una somma ma se uno dei due è un percorso di zeri
-		// devo ritornare un singolo nodo.
+	if (node->kind == KIND_CONST) {
+		node->req_grad = false;
+		return;
 	}
-	if (node->kind == KIND_MUL) {
-		// 
+	expr_set_req_grad(node->arg0);
+	expr_set_req_grad(node->arg1);
+	ExprNode *arg0_node = expr_get_node(node->arg0);
+	ExprNode *arg1_node = expr_get_node(node->arg1);
+	if (arg0_node->req_grad || arg1_node->req_grad) {
+		node->req_grad = true;
 	}
-	return HANDLE_NULL;
+}
+
+static ExprHandle
+expr_differentiate(ExprHandle handle) {
+	ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return HANDLE_NULL;
+	}
 }
 
 int main(int argc, char const *argv[]) {
-	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
+	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	ExprHandle lhs = expr_make_operator(
 		KIND_ADD, 
@@ -206,8 +202,9 @@ int main(int argc, char const *argv[]) {
 		),
 		expr_make_operator(KIND_MUL, lhs, rhs)
 	);
-	res = expr_make_operator(KIND_DER, res);
+	res = expr_make_operator(KIND_TRANS, res);
 	expr_print(res);
+	expr_set_req_grad(res);
 
 	return 0;
 }
