@@ -1,11 +1,41 @@
-#include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdnoreturn.h>
 
 int printf(const char *, ...);
 
 #define SWAP(T, x, y) do { T tmp = x; x = y; y = tmp; } while (0)
+
+/* It may be a good idea to have immutable nodes to avoid copies. The only
+ * problem with this approach is how to do the req_grad trick. Also at this
+ * point it makes sense to have the differential as an operator that we create
+ * *only* on leaf variable nodes. If we go this route additional savings could
+ * be obtained from reference counting the nodes or more advanced memory
+ * management.
+ */
+
+enum Error {
+	ERROR_BAD_ALLOC,
+	ERROR_BAD_ARG,
+	ERROR_BAD_DATA,
+};
+
+noreturn void
+panic(enum Error err) {
+	// TODO: this should print to stderr.
+	// https://learn.microsoft.com/en-us/windows/win32/debug/capturestackbacktrace
+	switch (err) {
+	case ERROR_BAD_ALLOC:
+		printf("unable to allocate memory");
+	case ERROR_BAD_ARG:
+		printf("a bad argument was passed");
+	case ERROR_BAD_DATA:
+		printf("data in a node has violated an invariant");
+	}
+	if (IsDebuggerPresent()) DebugBreak();
+	exit(1);
+}
 
 typedef enum Kind {
 	KIND_NULL,
@@ -21,15 +51,19 @@ typedef enum Kind {
 
 // The lower the number the higher the precedence (think of it as first, second,
 // third, ...)
-CHECK_KIND(6);
-int kind_precedence[KIND_COUNT] = {
-	[KIND_NULL] = 0,
-	[KIND_CONST] = 0,
-	[KIND_VAR] = 0,
-	[KIND_ADD] = 3,
-	[KIND_MUL] = 2,
-	[KIND_TRANS] = 1,
-};
+static int
+kind_precedence(Kind kind) {
+	CHECK_KIND(6);
+	switch (kind) {
+	case KIND_NULL:  return 0;
+	case KIND_CONST: return 0;
+	case KIND_VAR:   return 0;
+	case KIND_ADD:   return 3;
+	case KIND_MUL:   return 2;
+	case KIND_TRANS: return 1;
+	}
+	panic(ERROR_BAD_ARG);
+}
 
 typedef uint16_t ExprHandle;
 #define HANDLE_MAX UINT16_MAX
@@ -40,8 +74,9 @@ typedef uint16_t ExprHandle;
 // ecc... Would make things more ergonomic.
 typedef struct ExprNode {
 	Kind kind;
-	char name;
-	bool req_grad;
+	char name;          // To distinguish constants.
+	bool req_grad : 1;  // For the differentiation process.
+	bool has_diff : 1;  // Fot the differentiation process.
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -58,57 +93,61 @@ expr_char(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
 	CHECK_KIND(6);
 	switch (node->kind) {
-	case KIND_NULL:
-		return '\0';
-	case KIND_CONST:
-		return node->name;
-	case KIND_VAR:
-		return node->name;
-	case KIND_ADD:
-		return '+';
-	case KIND_MUL:
-		return '*';
-	case KIND_TRANS:
-		return '\'';
+	case KIND_NULL:  return '\0';
+	case KIND_CONST: return node->name;
+	case KIND_VAR:   return 'X';
+	case KIND_ADD:   return '+';
+	case KIND_MUL:   return '.';
+	case KIND_TRANS: return '\'';
 	}
-	__assume(0);
+	panic(ERROR_BAD_ARG);
 }
 
 static void
-expr_print(ExprHandle handle) {
+expr_print_internal(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return;
 	}
 
-	int node_precedence = kind_precedence[node->kind];
-	int arg0_precedence = kind_precedence[expr_get_node(node->arg0)->kind];
-	int arg1_precedence = kind_precedence[expr_get_node(node->arg1)->kind];
+	// NOTE: should I check the size of kind?
+	int node_precedence = kind_precedence(node->kind);
+	int arg0_precedence = kind_precedence(expr_get_node(node->arg0)->kind);
+	int arg1_precedence = kind_precedence(expr_get_node(node->arg1)->kind);
 	bool arg0_print_parenthesis = arg0_precedence > node_precedence;
 	bool arg1_print_parenthesis = arg1_precedence > node_precedence;
 
 	if (arg0_print_parenthesis) {
 		printf("(");
 	}
-	expr_print(node->arg0);
+	expr_print_internal(node->arg0);
 	if (arg0_print_parenthesis) {
 		printf(")");
 	}
+	if (node->has_diff) printf("d");
 	printf("%c", expr_char(handle));
 	if (arg1_print_parenthesis) {
 		printf("(");
 	}
-	expr_print(node->arg1);
+	expr_print_internal(node->arg1);
 	if (arg1_print_parenthesis) {
 		printf(")");
 	}
+}
+
+static void
+expr_print(ExprHandle handle) {
+	expr_print_internal(handle);
+	printf("\n");
 }
 
 static ExprHandle node_pool_watermark = 1;
 
 static ExprHandle
 expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
-	assert(node_pool_watermark != HANDLE_MAX);
+	if (node_pool_watermark == HANDLE_MAX) {
+		panic(ERROR_BAD_ALLOC);
+	}
 	ExprHandle res = node_pool_watermark++;
 	node_pool[res] = (ExprNode) {
 		.kind = kind,
@@ -120,9 +159,16 @@ expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 }
 
 static ExprHandle
-expr_make_operand(Kind kind, char name) {
+expr_make_operand(Kind kind, ...) {
 	if (kind != KIND_CONST && kind != KIND_VAR) {
 		return HANDLE_NULL;
+	}
+	char name = 'X';
+	if (kind == KIND_CONST) {
+		va_list args;
+		va_start(args, kind);
+		name = va_arg(args, char);
+		va_end(args);
 	}
 	return expr_make_node(kind, name, HANDLE_NULL, HANDLE_NULL);
 }
@@ -146,11 +192,8 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 	return expr_make_node(kind, '\0', arg0, arg1);
 }
 
-// 1. traverse the tree to understand which branches require the gradient.
-// 2. immagine that you are applying the differential to the expression,
-//    starting from the top and goint to the bottom.
 static void
-expr_set_req_grad(ExprHandle handle) {
+expr_set_req_grad_internal(ExprHandle handle) {
 	ExprNode *node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return;
@@ -163,8 +206,8 @@ expr_set_req_grad(ExprHandle handle) {
 		node->req_grad = false;
 		return;
 	}
-	expr_set_req_grad(node->arg0);
-	expr_set_req_grad(node->arg1);
+	expr_set_req_grad_internal(node->arg0);
+	expr_set_req_grad_internal(node->arg1);
 	ExprNode *arg0_node = expr_get_node(node->arg0);
 	ExprNode *arg1_node = expr_get_node(node->arg1);
 	if (arg0_node->req_grad || arg1_node->req_grad) {
@@ -173,25 +216,105 @@ expr_set_req_grad(ExprHandle handle) {
 }
 
 static ExprHandle
-expr_differentiate(ExprHandle handle) {
-	ExprNode *node = expr_get_node(handle);
+expr_copy(ExprHandle handle) {
+	const ExprNode *node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
 	}
+	ExprHandle arg0_copy = expr_copy(node->arg0);
+	ExprHandle arg1_copy = expr_copy(node->arg1);
+	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
+}
+
+static ExprHandle
+expr_differentiate_internal(ExprHandle handle) {
+	ExprNode *node = expr_get_node(handle);
+	if (!node->req_grad) {
+		return HANDLE_NULL;
+	}
+	ExprHandle arg0_der = expr_differentiate_internal(node->arg0);
+	ExprHandle arg1_der = expr_differentiate_internal(node->arg1);
+	CHECK_KIND(6);
+	switch (node->kind) {
+	case KIND_NULL:
+		return HANDLE_NULL;
+	case KIND_CONST:
+		return HANDLE_NULL;
+	case KIND_VAR: {
+		ExprHandle res = expr_make_operand(node->kind, node->name);
+		expr_get_node(res)->has_diff = true;
+		return res;
+	}
+	case KIND_TRANS: {
+		return expr_make_operator(node->kind, arg0_der);
+	}
+	case KIND_ADD: {
+		if (arg0_der && arg1_der) {
+			return expr_make_operator(KIND_ADD, arg0_der, arg1_der);
+		}
+		if (arg0_der) {
+			return arg0_der;
+		}
+		if (arg1_der) {
+			return arg1_der;
+		}
+		panic(ERROR_BAD_DATA);
+	}
+	case KIND_MUL: {
+		if (arg0_der && arg1_der) {
+			return expr_make_operator(KIND_ADD,
+				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
+				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
+			);
+		}
+		if (arg0_der) {
+			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
+		}
+		if (arg1_der) {
+			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
+		}
+		panic(ERROR_BAD_DATA);
+	}
+	}
+	panic(ERROR_BAD_DATA);
+}
+
+static ExprHandle
+expr_differentiate(ExprHandle handle) {
+	expr_set_req_grad_internal(handle);
+	return expr_differentiate_internal(handle);
+}
+
+// Applicare le regole distributive della molitplicazione e della trasposta.
+static ExprHandle
+expr_distribute(ExprHandle handle) {
+	const ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return HANDLE_NULL;
+	}
+
+	if (node->kind == KIND_TRANS) {
+		return HANDLE_NULL;
+	}
+
+	if (node->kind == KIND_MUL) {
+		return HANDLE_NULL;
+	}
+	return HANDLE_NULL;
 }
 
 int main(int argc, char const *argv[]) {
-	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
+	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	ExprHandle lhs = expr_make_operator(
 		KIND_ADD, 
-		expr_make_operand(KIND_VAR, 'X'),
+		expr_make_operand(KIND_VAR),
 		expr_make_operand(KIND_CONST, 'B')
 	);
 	ExprHandle rhs = expr_make_operator(
 		KIND_ADD,
 		expr_make_operand(KIND_CONST, 'C'),
-		expr_make_operand(KIND_CONST, 'D')
+		expr_make_operand(KIND_VAR)
 	);
 	ExprHandle res = expr_make_operator(
 		KIND_MUL,
@@ -204,7 +327,7 @@ int main(int argc, char const *argv[]) {
 	);
 	res = expr_make_operator(KIND_TRANS, res);
 	expr_print(res);
-	expr_set_req_grad(res);
-
+	ExprHandle res_der = expr_differentiate(res);
+	expr_print(res_der);
 	return 0;
 }
