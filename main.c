@@ -124,6 +124,7 @@ expr_print_internal(ExprHandle handle) {
 	if (arg0_print_parenthesis) {
 		printf(")");
 	}
+	// NOTE: this does not work right with precedence...
 	if (node->has_diff) printf("d");
 	printf("%c", expr_char(handle));
 	if (arg1_print_parenthesis) {
@@ -239,6 +240,9 @@ expr_differentiate_internal(ExprHandle handle) {
 	}
 	ExprHandle arg0_der = expr_differentiate_internal(node->arg0);
 	ExprHandle arg1_der = expr_differentiate_internal(node->arg1);
+	bool arg0_der_ok = expr_is_valid(arg0_der);
+	bool arg1_der_ok = expr_is_valid(arg1_der);
+
 	CHECK_KIND(6);
 	switch (node->kind) {
 	case KIND_NULL:
@@ -254,31 +258,29 @@ expr_differentiate_internal(ExprHandle handle) {
 		return expr_make_operator(node->kind, arg0_der);
 	}
 	case KIND_ADD: {
-		if (expr_is_valid(arg0_der) && expr_is_valid(arg1_der)) {
+		if (arg0_der_ok && arg1_der_ok) {
 			return expr_make_operator(KIND_ADD, arg0_der, arg1_der);
 		}
-		if (expr_is_valid(arg0_der)) {
+		if (arg0_der_ok) {
 			return arg0_der;
 		}
-		if (expr_is_valid(arg1_der)) {
+		if (arg1_der_ok) {
 			return arg1_der;
 		}
-		panic(ERROR_BAD_DATA);
 	}
 	case KIND_MUL: {
-		if (expr_is_valid(arg0_der) && expr_is_valid(arg1_der)) {
+		if (arg0_der_ok && arg1_der_ok) {
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
 				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
 			);
 		}
-		if (expr_is_valid(arg0_der)) {
+		if (arg0_der_ok) {
 			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
 		}
-		if (expr_is_valid(arg1_der)) {
+		if (arg1_der_ok) {
 			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
 		}
-		panic(ERROR_BAD_DATA);
 	}
 	}
 	panic(ERROR_BAD_DATA);
@@ -291,21 +293,82 @@ expr_differentiate(ExprHandle handle) {
 }
 
 // Applicare le regole distributive della molitplicazione e della trasposta.
+// Questa procedura va applicata finché ci sono cambiamenti.
 static ExprHandle
 expr_distribute(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
+	const ExprNode *arg0_node = expr_get_node(node->arg0);
+	const ExprNode *arg1_node = expr_get_node(node->arg1);
+
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
 	}
 
 	if (node->kind == KIND_TRANS) {
-		return HANDLE_NULL;
+		if (arg0_node->kind == KIND_TRANS) {
+			// (A')' => A
+			return expr_distribute(arg0_node->arg0);
+		}
+		if (arg0_node->kind == KIND_ADD) {
+			// (A+B)' => A' + B'
+			return expr_make_operator(KIND_ADD,
+				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg0)),
+				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg1))
+			);
+		}
+		if (arg0_node->kind == KIND_MUL) {
+			// (A.B)' => B'A'
+			return expr_make_operator(KIND_MUL,
+				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg1)),
+				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg0))
+			);
+		}
 	}
 
 	if (node->kind == KIND_MUL) {
-		return HANDLE_NULL;
+		bool arg0_is_add = arg0_node->kind == KIND_ADD;
+		bool arg1_is_add = arg1_node->kind == KIND_ADD;
+		if (arg0_is_add && arg1_is_add) {
+			// (A+B).(C+D) =*> A.C+B.C+A.D+B.D
+			ExprHandle A = expr_distribute(arg0_node->arg0);
+			ExprHandle B = expr_distribute(arg0_node->arg1);
+			ExprHandle C = expr_distribute(arg1_node->arg0);
+			ExprHandle D = expr_distribute(arg1_node->arg1);
+
+			ExprHandle AC = expr_make_operator(KIND_MUL, A, C);
+			ExprHandle BC = expr_make_operator(KIND_MUL, B, C);
+			ExprHandle AD = expr_make_operator(KIND_MUL, A, D);
+			ExprHandle BD = expr_make_operator(KIND_MUL, B, D);
+			return expr_make_operator(KIND_ADD,
+				expr_make_operator(KIND_ADD, AC, BC),
+				expr_make_operator(KIND_ADD, AD, BD)
+			);
+		}
+		if (arg0_is_add) {
+			// (A+B).C => A.C+B.C
+			ExprHandle C = expr_distribute(node->arg1);
+			ExprHandle A = expr_distribute(arg0_node->arg0);
+			ExprHandle B = expr_distribute(arg0_node->arg1);
+			return expr_make_operator(KIND_ADD,
+				expr_make_operator(KIND_MUL, A, C),
+				expr_make_operator(KIND_MUL, B, C)
+			);
+		}
+		if (arg1_is_add) {
+			// A.(C+D) => A.C+A.D
+			ExprHandle A = expr_distribute(node->arg0);
+			ExprHandle C = expr_distribute(arg1_node->arg0);
+			ExprHandle D = expr_distribute(arg1_node->arg1);
+			return expr_make_operator(KIND_ADD,
+				expr_make_operator(KIND_MUL, A, C),
+				expr_make_operator(KIND_MUL, A, D)
+			);
+		}
 	}
-	return HANDLE_NULL;
+
+	return expr_make_node(node->kind, node->name,
+		expr_distribute(node->arg0), expr_distribute(node->arg1)
+	);
 }
 
 int main(int argc, char const *argv[]) {
@@ -334,5 +397,7 @@ int main(int argc, char const *argv[]) {
 	expr_print(res);
 	ExprHandle res_der = expr_differentiate(res);
 	expr_print(res_der);
+	ExprHandle res_dist = expr_distribute(res_der);
+	expr_print(res_dist);
 	return 0;
 }

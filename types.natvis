@@ -18,21 +18,12 @@ https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-n
         <Item Name="[arg0]" Condition="has_at_least_one_arg()">arg0</Item>
         <Item Name="[arg1]" Condition="has_at_least_one_arg()
           &amp;&amp; kind != KIND_TRANS">arg1</Item>
-        <!--
-        <TreeItems>
-          <Size>_Mysize</Size>
-          <HeadPointer>_Myhead->_Parent</HeadPointer>
-          <LeftPointer>_Left</LeftPointer>
-          <RightPointer>_Right</RightPointer>
-          <ValueNode Condition="!((bool)_Isnil)">_Myval</ValueNode>
-        </TreeItems>
-        -->
      </Expand>
   </Type>
   <Type Name="ExprHandle">
     <DisplayString>{{ handle={value} }}</DisplayString>
     <Expand>
-      <Item Name="[node]">node_pool[value]</Item>
+      <ExpandedItem>node_pool[value]</ExpandedItem>
     </Expand>
   </Type>
 </AutoVisualizer>
