@@ -65,8 +65,8 @@ kind_precedence(Kind kind) {
 	panic(ERROR_BAD_ARG);
 }
 
-typedef uint16_t ExprHandle;
-#define HANDLE_MAX UINT16_MAX
+typedef struct ExprHandle { uint16_t value; } ExprHandle;
+#define HANDLE_MAX_VALUE UINT16_MAX
 #define HANDLE_NULL ((ExprHandle){0})
 
 // NOTE: For debuging it would be better to have a string instead of a single
@@ -81,11 +81,11 @@ typedef struct ExprNode {
 	ExprHandle arg1;
 } ExprNode;
 
-static ExprNode node_pool[HANDLE_MAX + 1];
+static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
 
 static ExprNode *
 expr_get_node(ExprHandle handle) {
-	return node_pool + handle;
+	return node_pool + handle.value;
 }
 
 static char
@@ -141,15 +141,15 @@ expr_print(ExprHandle handle) {
 	printf("\n");
 }
 
-static ExprHandle node_pool_watermark = 1;
+static uint16_t node_pool_watermark = 1;
 
 static ExprHandle
 expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
-	if (node_pool_watermark == HANDLE_MAX) {
+	if (node_pool_watermark == HANDLE_MAX_VALUE) {
 		panic(ERROR_BAD_ALLOC);
 	}
-	ExprHandle res = node_pool_watermark++;
-	node_pool[res] = (ExprNode) {
+	ExprHandle res = (ExprHandle){node_pool_watermark++};
+	node_pool[res.value] = (ExprNode) {
 		.kind = kind,
 		.name = name,
 		.arg0 = arg0,
@@ -226,6 +226,11 @@ expr_copy(ExprHandle handle) {
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
 }
 
+static bool
+expr_is_valid(ExprHandle handle) {
+	return handle.value != HANDLE_NULL.value;
+}
+
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle) {
 	ExprNode *node = expr_get_node(handle);
@@ -249,28 +254,28 @@ expr_differentiate_internal(ExprHandle handle) {
 		return expr_make_operator(node->kind, arg0_der);
 	}
 	case KIND_ADD: {
-		if (arg0_der && arg1_der) {
+		if (expr_is_valid(arg0_der) && expr_is_valid(arg1_der)) {
 			return expr_make_operator(KIND_ADD, arg0_der, arg1_der);
 		}
-		if (arg0_der) {
+		if (expr_is_valid(arg0_der)) {
 			return arg0_der;
 		}
-		if (arg1_der) {
+		if (expr_is_valid(arg1_der)) {
 			return arg1_der;
 		}
 		panic(ERROR_BAD_DATA);
 	}
 	case KIND_MUL: {
-		if (arg0_der && arg1_der) {
+		if (expr_is_valid(arg0_der) && expr_is_valid(arg1_der)) {
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
 				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
 			);
 		}
-		if (arg0_der) {
+		if (expr_is_valid(arg0_der)) {
 			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
 		}
-		if (arg1_der) {
+		if (expr_is_valid(arg1_der)) {
 			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
 		}
 		panic(ERROR_BAD_DATA);

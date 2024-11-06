@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects
+-->
+<AutoVisualizer
+  xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="ExprNode">
+    <Intrinsic Name="has_at_least_one_arg"
+      Expression="kind != KIND_NULL
+            &amp;&amp; kind != KIND_CONST
+            &amp;&amp; kind != KIND_VAR"/>
+     <DisplayString>{{ kind={kind} }}</DisplayString>
+     <Expand>
+        <Item Name="[kind]">kind</Item>
+        <Item Name="[name]" Condition="kind == KIND_CONST">name</Item>
+        <Item Name="[req_grad]">req_grad</Item>
+        <Item Name="[has_dif]" Condition="kind == KIND_VAR">req_grad</Item>
+        <Item Name="[arg0]" Condition="has_at_least_one_arg()">arg0</Item>
+        <Item Name="[arg1]" Condition="has_at_least_one_arg()
+          &amp;&amp; kind != KIND_TRANS">arg1</Item>
+        <!--
+        <TreeItems>
+          <Size>_Mysize</Size>
+          <HeadPointer>_Myhead->_Parent</HeadPointer>
+          <LeftPointer>_Left</LeftPointer>
+          <RightPointer>_Right</RightPointer>
+          <ValueNode Condition="!((bool)_Isnil)">_Myval</ValueNode>
+        </TreeItems>
+        -->
+     </Expand>
+  </Type>
+  <Type Name="ExprHandle">
+    <DisplayString>{{ handle={value} }}</DisplayString>
+    <Expand>
+      <Item Name="[node]">node_pool[value]</Item>
+    </Expand>
+  </Type>
+</AutoVisualizer>
