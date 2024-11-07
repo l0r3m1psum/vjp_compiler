@@ -8,14 +8,6 @@ int printf(const char *, ...);
 
 #define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
 
-/* It may be a good idea to have immutable nodes to avoid copies. The only
- * problem with this approach is how to do the req_grad trick. Also at this
- * point it makes sense to have the differential as an operator that we create
- * *only* on leaf variable nodes. If we go this route additional savings could
- * be obtained from reference counting the nodes or more advanced memory
- * management.
- */
-
 enum Error {
 	ERROR_BAD_ALLOC,
 	ERROR_BAD_ARG,
@@ -112,7 +104,7 @@ expr_char(ExprHandle handle) {
 	case KIND_ADD:   return '+';
 	case KIND_MUL:   return ' ';
 	case KIND_TRANS: return '\'';
-	case KIND_DIFF: return 'd';
+	case KIND_DIFF:  return 'd';
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -224,6 +216,8 @@ expr_is_valid(ExprHandle handle) {
 	return handle.value != HANDLE_NULL.value;
 }
 
+// NOTE: this function is where reuse of pieces of the tree would be most
+// beneficial
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNode *node = expr_get_node(handle);
@@ -235,7 +229,7 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	}
 	if (node->kind == KIND_VAR) {
 		*req_grad = true;
-		return expr_make_operator(KIND_DIFF, expr_make_operand(KIND_VAR));;
+		return expr_make_operator(KIND_DIFF, /* COPY */ expr_make_operand(KIND_VAR));
 	}
 
 	bool arg0_req_grad = false;
@@ -269,17 +263,17 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		if (arg0_req_grad && arg1_req_grad) {
 			*req_grad = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
-				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
+				expr_make_operator(KIND_MUL, arg0_der, /* COPY */ expr_copy(node->arg1)),
+				expr_make_operator(KIND_MUL, /* COPY */ expr_copy(node->arg0), arg1_der)
 			);
 		}
 		if (arg0_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
+			return expr_make_operator(KIND_MUL, arg0_der, /* COPY */ expr_copy(node->arg1));
 		}
 		if (arg1_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
+			return expr_make_operator(KIND_MUL, /* COPY */ expr_copy(node->arg0), arg1_der);
 		}
 	}
 	case KIND_DIFF:
@@ -320,7 +314,7 @@ expr_distribute(ExprHandle handle) {
 			);
 		}
 		if (arg0_node->kind == KIND_MUL) {
-			// (A.B)' => B'A'
+			// (A B)' => B'A'
 			return expr_make_operator(KIND_MUL,
 				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg1)),
 				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg0))
@@ -332,7 +326,7 @@ expr_distribute(ExprHandle handle) {
 		bool arg0_is_add = arg0_node->kind == KIND_ADD;
 		bool arg1_is_add = arg1_node->kind == KIND_ADD;
 		if (arg0_is_add && arg1_is_add) {
-			// (A+B).(C+D) =*> A.C+B.C+A.D+B.D
+			// (A+B) (C+D) => (A+B) C+(A+B) D => A C+B C+A D+B D
 			ExprHandle A = expr_distribute(arg0_node->arg0);
 			ExprHandle B = expr_distribute(arg0_node->arg1);
 			ExprHandle C = expr_distribute(arg1_node->arg0);
@@ -348,7 +342,7 @@ expr_distribute(ExprHandle handle) {
 			);
 		}
 		if (arg0_is_add) {
-			// (A+B).C => A.C+B.C
+			// (A+B) C => A C+B C
 			ExprHandle C = expr_distribute(node->arg1);
 			ExprHandle A = expr_distribute(arg0_node->arg0);
 			ExprHandle B = expr_distribute(arg0_node->arg1);
@@ -358,7 +352,7 @@ expr_distribute(ExprHandle handle) {
 			);
 		}
 		if (arg1_is_add) {
-			// A.(C+D) => A.C+A.D
+			// A (C+D) => A C+A D
 			ExprHandle A = expr_distribute(node->arg0);
 			ExprHandle C = expr_distribute(arg1_node->arg0);
 			ExprHandle D = expr_distribute(arg1_node->arg1);
@@ -369,10 +363,50 @@ expr_distribute(ExprHandle handle) {
 		}
 	}
 
-	return expr_make_node(node->kind, node->name,
+	return /* COPY (for VAR and CONST) */ expr_make_node(node->kind, node->name,
 		expr_distribute(node->arg0), expr_distribute(node->arg1)
 	);
 }
+
+static void
+expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
+	ExprNode *node = expr_get_node(handle);
+	CHECK_KIND(7);
+	switch (node->kind) {
+	case KIND_NULL:
+		break;
+	case KIND_CONST:
+	case KIND_VAR:
+		(*operand_count)++;
+		break;
+	case KIND_MUL:
+	case KIND_ADD:
+		expr_stat_internal(node->arg0, operator_count, operand_count);
+		expr_stat_internal(node->arg1, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	case KIND_TRANS:
+		expr_stat_internal(node->arg0, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	case KIND_DIFF:
+		expr_stat_internal(node->arg1, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	}
+	// TODO: duplicated count?
+	return;
+}
+
+static uint16_t
+expr_stat(ExprHandle handle) {
+	uint16_t operator_count = 0, operand_count = 0;
+	expr_stat_internal(handle, &operator_count, &operand_count);
+	printf("#operand=%d #operator=%d\n", operand_count, operator_count);
+}
+
+// TODO: write a pool allocator for the nodes, this, by making a new copy every
+// time, is the simplest way handle memory management for now.
 
 int main(int argc, char const *argv[]) {
 	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
@@ -396,15 +430,12 @@ int main(int argc, char const *argv[]) {
 		),
 		expr_make_operator(KIND_MUL, lhs, rhs)
 	);
-	res = expr_make_operator(KIND_TRANS, res);
-	expr_print(res);
-	ExprHandle res_der = expr_differentiate(res);
-	expr_print(res_der);
-	ExprHandle res_dist = res_der;
-	res_dist = expr_distribute(res_dist); expr_print(res_dist);
-	res_dist = expr_distribute(res_dist); expr_print(res_dist);
-	res_dist = expr_distribute(res_dist); expr_print(res_dist);
-	res_dist = expr_distribute(res_dist); expr_print(res_dist);
-	res_dist = expr_distribute(res_dist); expr_print(res_dist);
+	res = expr_make_operator(KIND_TRANS, res); expr_print(res); expr_stat(res);
+	res = expr_differentiate(res); expr_print(res); expr_stat(res);
+	res = expr_distribute(res); expr_print(res); expr_stat(res);
+	res = expr_distribute(res); expr_print(res); expr_stat(res);
+	res = expr_distribute(res); expr_print(res); expr_stat(res);
+	res = expr_distribute(res); expr_print(res); expr_stat(res);
+	res = expr_distribute(res); expr_print(res); expr_stat(res);
 	return 0;
 }
