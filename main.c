@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdnoreturn.h>
 
+#include <stdlib.h>
+
 int printf(const char *, ...);
 
 #define SWAP(T, x, y) do { T tmp = x; x = y; y = tmp; } while (0)
@@ -33,7 +35,18 @@ panic(enum Error err) {
 	case ERROR_BAD_DATA:
 		printf("data in a node has violated an invariant");
 	}
-	if (IsDebuggerPresent()) DebugBreak();
+// We assume that each platform compiles with it compiler for simplicity
+#if defined(_WIN64)
+	// if (IsDebuggerPresent()) DebugBreak();
+	__debugbreak();
+#elif defined(__APPLE__)
+	// https://stackoverflow.com/questions/2200277/detecting-debugger-on-mac-os-x
+	__builtin_debugtrap();
+#elif defined(__linux__)
+	// https://stackoverflow.com/questions/3596781/how-to-detect-if-the-current-process-is-being-run-by-gdb
+	__builtin_trap();
+#else
+#endif
 	exit(1);
 }
 
@@ -46,7 +59,7 @@ typedef enum Kind {
 	KIND_TRANS,
 } Kind;
 #define KIND_COUNT 6
-#define CHECK_KIND(n) static_assert(KIND_COUNT == (n), \
+#define CHECK_KIND(n) _Static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
 // The lower the number the higher the precedence (think of it as first, second,
@@ -168,7 +181,7 @@ expr_make_operand(Kind kind, ...) {
 	if (kind == KIND_CONST) {
 		va_list args;
 		va_start(args, kind);
-		name = va_arg(args, char);
+		name = va_arg(args, int);
 		va_end(args);
 	}
 	return expr_make_node(kind, name, HANDLE_NULL, HANDLE_NULL);
@@ -294,6 +307,8 @@ expr_differentiate(ExprHandle handle) {
 
 // Applicare le regole distributive della molitplicazione e della trasposta.
 // Questa procedura va applicata finché ci sono cambiamenti.
+// FIXME: had_diff flags is not copied, treat differential as an operator to fix
+// this easily.
 static ExprHandle
 expr_distribute(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
@@ -397,7 +412,11 @@ int main(int argc, char const *argv[]) {
 	expr_print(res);
 	ExprHandle res_der = expr_differentiate(res);
 	expr_print(res_der);
-	ExprHandle res_dist = expr_distribute(res_der);
-	expr_print(res_dist);
+	ExprHandle res_dist = res_der;
+	res_dist = expr_distribute(res_dist); expr_print(res_dist);
+	res_dist = expr_distribute(res_dist); expr_print(res_dist);
+	res_dist = expr_distribute(res_dist); expr_print(res_dist);
+	res_dist = expr_distribute(res_dist); expr_print(res_dist);
+	res_dist = expr_distribute(res_dist); expr_print(res_dist);
 	return 0;
 }
