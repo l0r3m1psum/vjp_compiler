@@ -3,11 +3,10 @@
 #include <stdint.h>
 #include <stdnoreturn.h>
 
-#include <stdlib.h>
-
+noreturn void exit(int);
 int printf(const char *, ...);
 
-#define SWAP(T, x, y) do { T tmp = x; x = y; y = tmp; } while (0)
+#define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
 
 /* It may be a good idea to have immutable nodes to avoid copies. The only
  * problem with this approach is how to do the req_grad trick. Also at this
@@ -57,8 +56,9 @@ typedef enum Kind {
 	KIND_ADD,
 	KIND_MUL,
 	KIND_TRANS,
+	KIND_DIFF,
 } Kind;
-#define KIND_COUNT 6
+#define KIND_COUNT 7
 #define CHECK_KIND(n) _Static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
@@ -66,14 +66,15 @@ typedef enum Kind {
 // third, ...)
 static int
 kind_precedence(Kind kind) {
-	CHECK_KIND(6);
+	CHECK_KIND(7);
 	switch (kind) {
 	case KIND_NULL:  return 0;
 	case KIND_CONST: return 0;
 	case KIND_VAR:   return 0;
-	case KIND_ADD:   return 3;
-	case KIND_MUL:   return 2;
-	case KIND_TRANS: return 1;
+	case KIND_ADD:   return 4;
+	case KIND_MUL:   return 3;
+	case KIND_TRANS: return 2;
+	case KIND_DIFF:  return 1;
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -88,8 +89,8 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 typedef struct ExprNode {
 	Kind kind;
 	char name;          // To distinguish constants.
+	// TODO: remove this.
 	bool req_grad : 1;  // For the differentiation process.
-	bool has_diff : 1;  // Fot the differentiation process.
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -104,14 +105,15 @@ expr_get_node(ExprHandle handle) {
 static char
 expr_char(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
-	CHECK_KIND(6);
+	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:  return '\0';
-	case KIND_CONST: return node->name;
+	case KIND_CONST: return node->name; // We should allow only upper case letters
 	case KIND_VAR:   return 'X';
 	case KIND_ADD:   return '+';
-	case KIND_MUL:   return '.';
+	case KIND_MUL:   return ' ';
 	case KIND_TRANS: return '\'';
+	case KIND_DIFF: return 'd';
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -123,7 +125,6 @@ expr_print_internal(ExprHandle handle) {
 		return;
 	}
 
-	// NOTE: should I check the size of kind?
 	int node_precedence = kind_precedence(node->kind);
 	int arg0_precedence = kind_precedence(expr_get_node(node->arg0)->kind);
 	int arg1_precedence = kind_precedence(expr_get_node(node->arg1)->kind);
@@ -137,8 +138,6 @@ expr_print_internal(ExprHandle handle) {
 	if (arg0_print_parenthesis) {
 		printf(")");
 	}
-	// NOTE: this does not work right with precedence...
-	if (node->has_diff) printf("d");
 	printf("%c", expr_char(handle));
 	if (arg1_print_parenthesis) {
 		printf("(");
@@ -189,20 +188,24 @@ expr_make_operand(Kind kind, ...) {
 
 static ExprHandle
 expr_make_operator(Kind kind, ExprHandle arg0, ...) {
-	if (kind != KIND_ADD && kind != KIND_MUL && kind != KIND_TRANS) {
+	if (kind != KIND_ADD
+		&& kind != KIND_MUL
+		&& kind != KIND_TRANS
+		&& kind != KIND_DIFF) {
 		return HANDLE_NULL;
 	}
 	ExprHandle arg1 = HANDLE_NULL;
-	if (kind != KIND_TRANS) {
+	if (kind != KIND_TRANS && kind != KIND_DIFF) {
 		va_list args;
 		va_start(args, arg0);
 		arg1 = va_arg(args, ExprHandle);
 		va_end(args);
+	} else if (kind == KIND_DIFF) {
+		// This is done to make the print function work seamlessly with unary
+		// operators that have to appear on the left of their argument. Think of
+		// arg0 as the lhs and arg1 as the rhs of a binary operator.
+		SWAP(arg0, arg1, ExprHandle);
 	}
-	// To make the print function work seamlessly with the transpose think of
-	// arg0 as the lhs and arg1 as the rhs of a binary operator, then the
-	// transpose only has a left argument. For other unary operators you can
-	// just swap arg0 and arg1.
 	return expr_make_node(kind, '\0', arg0, arg1);
 }
 
@@ -256,17 +259,14 @@ expr_differentiate_internal(ExprHandle handle) {
 	bool arg0_der_ok = expr_is_valid(arg0_der);
 	bool arg1_der_ok = expr_is_valid(arg1_der);
 
-	CHECK_KIND(6);
+	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:
 		return HANDLE_NULL;
 	case KIND_CONST:
 		return HANDLE_NULL;
-	case KIND_VAR: {
-		ExprHandle res = expr_make_operand(node->kind, node->name);
-		expr_get_node(res)->has_diff = true;
-		return res;
-	}
+	case KIND_VAR:
+		return expr_make_operator(KIND_DIFF, expr_make_operand(KIND_VAR));
 	case KIND_TRANS: {
 		return expr_make_operator(node->kind, arg0_der);
 	}
@@ -295,6 +295,9 @@ expr_differentiate_internal(ExprHandle handle) {
 			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
 		}
 	}
+	case KIND_DIFF:
+		// Differential nodes should only be applied to variables node.
+		;
 	}
 	panic(ERROR_BAD_DATA);
 }
@@ -307,8 +310,6 @@ expr_differentiate(ExprHandle handle) {
 
 // Applicare le regole distributive della molitplicazione e della trasposta.
 // Questa procedura va applicata finché ci sono cambiamenti.
-// FIXME: had_diff flags is not copied, treat differential as an operator to fix
-// this easily.
 static ExprHandle
 expr_distribute(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
