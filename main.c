@@ -89,6 +89,7 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 typedef struct ExprNode {
 	Kind kind;
 	char name;       // To distinguish constants.
+	char padding[3];
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -205,29 +206,6 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 		SWAP(arg0, arg1, ExprHandle);
 	}
 	return expr_make_node(kind, '\0', arg0, arg1);
-}
-
-static void
-expr_set_req_grad_internal(ExprHandle handle) {
-	ExprNode *node = expr_get_node(handle);
-	if (node->kind == KIND_NULL) {
-		return;
-	}
-	if (node->kind == KIND_VAR) {
-		node->req_grad = true;
-		return;
-	}
-	if (node->kind == KIND_CONST) {
-		node->req_grad = false;
-		return;
-	}
-	expr_set_req_grad_internal(node->arg0);
-	expr_set_req_grad_internal(node->arg1);
-	ExprNode *arg0_node = expr_get_node(node->arg0);
-	ExprNode *arg1_node = expr_get_node(node->arg1);
-	if (arg0_node->req_grad || arg1_node->req_grad) {
-		node->req_grad = true;
-	}
 }
 
 static ExprHandle
