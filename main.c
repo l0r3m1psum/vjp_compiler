@@ -84,13 +84,11 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 #define HANDLE_NULL ((ExprHandle){0})
 
 // NOTE: For debuging it would be better to have a string instead of a single
-// character, also probably generating names automatically linke A000, A001,
+// character, also probably generating names automatically like A000, A001,
 // ecc... Would make things more ergonomic.
 typedef struct ExprNode {
 	Kind kind;
-	char name;          // To distinguish constants.
-	// TODO: remove this.
-	bool req_grad : 1;  // For the differentiation process.
+	char name;       // To distinguish constants.
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -249,49 +247,60 @@ expr_is_valid(ExprHandle handle) {
 }
 
 static ExprHandle
-expr_differentiate_internal(ExprHandle handle) {
+expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNode *node = expr_get_node(handle);
-	if (!node->req_grad) {
-		return HANDLE_NULL;
-	}
-	ExprHandle arg0_der = expr_differentiate_internal(node->arg0);
-	ExprHandle arg1_der = expr_differentiate_internal(node->arg1);
-	bool arg0_der_ok = expr_is_valid(arg0_der);
-	bool arg1_der_ok = expr_is_valid(arg1_der);
 
 	CHECK_KIND(7);
+	if (node->kind == KIND_NULL || node->kind == KIND_CONST) {
+		*req_grad = false;
+		return HANDLE_NULL;
+	}
+	if (node->kind == KIND_VAR) {
+		*req_grad = true;
+		return expr_make_operator(KIND_DIFF, expr_make_operand(KIND_VAR));;
+	}
+
+	bool arg0_req_grad = false;
+	bool arg1_req_grad = false;
+	ExprHandle arg0_der = expr_differentiate_internal(node->arg0, &arg0_req_grad);
+	ExprHandle arg1_der = expr_differentiate_internal(node->arg1, &arg1_req_grad);
+	if (!arg0_req_grad && !arg1_req_grad) {
+		return *req_grad = false, HANDLE_NULL;
+	}
+
 	switch (node->kind) {
-	case KIND_NULL:
-		return HANDLE_NULL;
-	case KIND_CONST:
-		return HANDLE_NULL;
-	case KIND_VAR:
-		return expr_make_operator(KIND_DIFF, expr_make_operand(KIND_VAR));
 	case KIND_TRANS: {
-		return expr_make_operator(node->kind, arg0_der);
+		*req_grad = true;
+		return expr_make_operator(KIND_TRANS, arg0_der);
 	}
 	case KIND_ADD: {
-		if (arg0_der_ok && arg1_der_ok) {
+		if (arg0_req_grad && arg1_req_grad) {
+			*req_grad = true;
 			return expr_make_operator(KIND_ADD, arg0_der, arg1_der);
 		}
-		if (arg0_der_ok) {
+		if (arg0_req_grad) {
+			*req_grad = true;
 			return arg0_der;
 		}
-		if (arg1_der_ok) {
+		if (arg1_req_grad) {
+			*req_grad = true;
 			return arg1_der;
 		}
 	}
 	case KIND_MUL: {
-		if (arg0_der_ok && arg1_der_ok) {
+		if (arg0_req_grad && arg1_req_grad) {
+			*req_grad = true;
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
 				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
 			);
 		}
-		if (arg0_der_ok) {
+		if (arg0_req_grad) {
+			*req_grad = true;
 			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
 		}
-		if (arg1_der_ok) {
+		if (arg1_req_grad) {
+			*req_grad = true;
 			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
 		}
 	}
@@ -304,12 +313,12 @@ expr_differentiate_internal(ExprHandle handle) {
 
 static ExprHandle
 expr_differentiate(ExprHandle handle) {
-	expr_set_req_grad_internal(handle);
-	return expr_differentiate_internal(handle);
+	bool req_grad = true;
+	return expr_differentiate_internal(handle, &req_grad);
 }
 
-// Applicare le regole distributive della molitplicazione e della trasposta.
-// Questa procedura va applicata finché ci sono cambiamenti.
+// TODO: rename this to expr_distribute_internal and call it in a function that
+// loops until no more changes are made.
 static ExprHandle
 expr_distribute(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
