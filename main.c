@@ -295,12 +295,8 @@ expr_differentiate(ExprHandle handle) {
 	return expr_differentiate_internal(handle, &req_grad);
 }
 
-// TODO: rename this to expr_distribute_internal and call it in a function that
-// loops until no more changes are made. How do I detect if a change has been
-// made? The easiest way is to pass a pointer to a boolean down the recursion
-// initialize it as false and set it as true every time a change is made.
 static ExprHandle
-expr_distribute(ExprHandle handle) {
+expr_distr_internal(ExprHandle handle, bool *changed) {
 	const ExprNode *node = expr_get_node(handle);
 	const ExprNode *arg0_node = expr_get_node(node->arg0);
 	const ExprNode *arg1_node = expr_get_node(node->arg1);
@@ -312,20 +308,23 @@ expr_distribute(ExprHandle handle) {
 	if (node->kind == KIND_TRANS) {
 		if (arg0_node->kind == KIND_TRANS) {
 			// (A')' => A
-			return expr_distribute(arg0_node->arg0);
+			*changed = true;
+			return expr_distr_internal(arg0_node->arg0, changed);
 		}
 		if (arg0_node->kind == KIND_ADD) {
 			// (A+B)' => A' + B'
+			*changed = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg0)),
-				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg1))
+				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg0, changed)),
+				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg1, changed))
 			);
 		}
 		if (arg0_node->kind == KIND_MUL) {
 			// (A B)' => B'A'
+			*changed = true;
 			return expr_make_operator(KIND_MUL,
-				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg1)),
-				expr_make_operator(KIND_TRANS, expr_distribute(arg0_node->arg0))
+				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg1, changed)),
+				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg0, changed))
 			);
 		}
 	}
@@ -335,15 +334,16 @@ expr_distribute(ExprHandle handle) {
 		bool arg1_is_add = arg1_node->kind == KIND_ADD;
 		if (arg0_is_add && arg1_is_add) {
 			// (A+B) (C+D) => (A+B) C+(A+B) D => A C+B C+A D+B D
-			ExprHandle A = expr_distribute(arg0_node->arg0);
-			ExprHandle B = expr_distribute(arg0_node->arg1);
-			ExprHandle C = expr_distribute(arg1_node->arg0);
-			ExprHandle D = expr_distribute(arg1_node->arg1);
+			ExprHandle A = expr_distr_internal(arg0_node->arg0, changed);
+			ExprHandle B = expr_distr_internal(arg0_node->arg1, changed);
+			ExprHandle C = expr_distr_internal(arg1_node->arg0, changed);
+			ExprHandle D = expr_distr_internal(arg1_node->arg1, changed);
 
 			ExprHandle AC = expr_make_operator(KIND_MUL, A, C);
 			ExprHandle BC = expr_make_operator(KIND_MUL, B, C);
 			ExprHandle AD = expr_make_operator(KIND_MUL, A, D);
 			ExprHandle BD = expr_make_operator(KIND_MUL, B, D);
+			*changed = true;
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_ADD, AC, BC),
 				expr_make_operator(KIND_ADD, AD, BD)
@@ -351,9 +351,10 @@ expr_distribute(ExprHandle handle) {
 		}
 		if (arg0_is_add) {
 			// (A+B) C => A C+B C
-			ExprHandle C = expr_distribute(node->arg1);
-			ExprHandle A = expr_distribute(arg0_node->arg0);
-			ExprHandle B = expr_distribute(arg0_node->arg1);
+			ExprHandle C = expr_distr_internal(node->arg1, changed);
+			ExprHandle A = expr_distr_internal(arg0_node->arg0, changed);
+			ExprHandle B = expr_distr_internal(arg0_node->arg1, changed);
+			*changed = true;
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_MUL, A, C),
 				expr_make_operator(KIND_MUL, B, C)
@@ -361,9 +362,10 @@ expr_distribute(ExprHandle handle) {
 		}
 		if (arg1_is_add) {
 			// A (C+D) => A C+A D
-			ExprHandle A = expr_distribute(node->arg0);
-			ExprHandle C = expr_distribute(arg1_node->arg0);
-			ExprHandle D = expr_distribute(arg1_node->arg1);
+			ExprHandle A = expr_distr_internal(node->arg0, changed);
+			ExprHandle C = expr_distr_internal(arg1_node->arg0, changed);
+			ExprHandle D = expr_distr_internal(arg1_node->arg1, changed);
+			*changed = true;
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_MUL, A, C),
 				expr_make_operator(KIND_MUL, A, D)
@@ -375,8 +377,21 @@ expr_distribute(ExprHandle handle) {
 		return expr_copy(handle);
 	}
 	return expr_make_node(node->kind, node->name,
-		expr_distribute(node->arg0), expr_distribute(node->arg1)
+		expr_distr_internal(node->arg0, changed), expr_distr_internal(node->arg1, changed)
 	);
+}
+
+static ExprHandle
+expr_distr(ExprHandle handle) {
+	bool changed = true;
+	ExprHandle res = HANDLE_NULL, old_res = handle;
+	while (changed) {
+		changed = false;
+		res = expr_distr_internal(old_res, &changed);
+		// TODO: free old_res
+		old_res = res;
+	}
+	return res;
 }
 
 static void
@@ -443,10 +458,6 @@ int main(int argc, char const *argv[]) {
 	);
 	res = expr_make_operator(KIND_TRANS, res); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
-	res = expr_distribute(res); expr_print(res); expr_stat(res);
-	res = expr_distribute(res); expr_print(res); expr_stat(res);
-	res = expr_distribute(res); expr_print(res); expr_stat(res);
-	res = expr_distribute(res); expr_print(res); expr_stat(res);
-	res = expr_distribute(res); expr_print(res); expr_stat(res);
+	res = expr_distr(res); expr_print(res); expr_stat(res);
 	return 0;
 }
