@@ -5,7 +5,7 @@
 #include <stdnoreturn.h>
 
 noreturn void exit(int);
-int printf(const char *, ...);
+#include <stdio.h>
 
 #define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
 
@@ -21,12 +21,13 @@ panic(enum Error err) {
 	// https://learn.microsoft.com/en-us/windows/win32/debug/capturestackbacktrace
 	switch (err) {
 	case ERROR_BAD_ALLOC:
-		printf("unable to allocate memory");
+		printf("unable to allocate memory\n");
 	case ERROR_BAD_ARG:
-		printf("a bad argument was passed");
+		printf("a bad argument was passed\n");
 	case ERROR_BAD_DATA:
-		printf("data in a node has violated an invariant");
+		printf("data in a node has violated an invariant\n");
 	}
+	fflush(stdout);
 // We assume that each platform compiles with it compiler for simplicity
 #if defined(_WIN64)
 	// if (IsDebuggerPresent()) DebugBreak();
@@ -297,11 +298,20 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		panic(ERROR_BAD_DATA);
 	}
 	if (node->kind == KIND_INNER) {
-		// NOTE: this could be made to work... But an algorithm for dimension
-		// "unification" is needed.
-		// Inner products are only supposed to appear after the differentiation
-		// phase.
-		panic(ERROR_BAD_DATA);
+		if (arg0_req_grad && arg1_req_grad) {
+			// TODO: implement this.
+			// TODO: since we hace introduced scalars a unification algorithm
+			// for matrix dimensions is needed.
+			panic(ERROR_BAD_DATA);
+		}
+		if (arg0_req_grad) {
+			*req_grad = true;
+			return expr_make_operator(KIND_INNER, arg0_der, expr_copy(node->arg1));
+		}
+		if (arg1_req_grad) {
+			*req_grad = true;
+			return expr_make_operator(KIND_INNER, expr_copy(node->arg0), arg1_der);
+		}
 	}
 
 	panic(ERROR_BAD_DATA);
@@ -479,14 +489,12 @@ int main(int argc, char const *argv[]) {
 		),
 		expr_make_operator(KIND_MUL, lhs, rhs)
 	);
-	res = expr_make_operator(KIND_TRANS, res); expr_print(res); expr_stat(res);
+	res = expr_make_operator(KIND_INNER,
+		expr_make_operator(KIND_TRANS, expr_make_operand(KIND_CONST, 'G')),
+		expr_make_operator(KIND_TRANS, res)
+	); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 
-	res = expr_make_operator(KIND_INNER,
-		expr_make_operator(KIND_TRANS, expr_make_operand(KIND_CONST, 'G')),
-		res
-	); expr_print(res); expr_stat(res);
-	res = expr_distr(res); expr_print(res); expr_stat(res);
 	return 0;
 }
