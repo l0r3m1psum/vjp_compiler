@@ -50,8 +50,9 @@ typedef enum Kind {
 	KIND_MUL,
 	KIND_TRANS,
 	KIND_DIFF,
+	KIND_INNER,
 } Kind;
-#define KIND_COUNT 7
+#define KIND_COUNT 8
 #define CHECK_KIND(n) _Static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
@@ -59,15 +60,16 @@ typedef enum Kind {
 // third, ...)
 static int
 kind_precedence(Kind kind) {
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	switch (kind) {
 	case KIND_NULL:  return 0;
 	case KIND_CONST: return 0;
 	case KIND_VAR:   return 0;
-	case KIND_ADD:   return 4;
+	case KIND_ADD:   return 5;
 	case KIND_MUL:   return 3;
 	case KIND_TRANS: return 2;
 	case KIND_DIFF:  return 1;
+	case KIND_INNER: return 4;
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -78,9 +80,10 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 
 // NOTE: For debuging it would be better to have a string instead of a single
 // character, also probably generating names automatically like A000, A001,
-// ecc... Would make things more ergonomic.
+// ecc... Would make things more ergonomic. If names are generated automatically
+// a numerical ID shall be used instead.
 typedef struct ExprNode {
-	Kind kind;
+	Kind kind;       // TODO: this can be made smaller
 	char name;       // To distinguish constants.
 	char padding[3];
 	ExprHandle arg0;
@@ -97,15 +100,22 @@ expr_get_node(ExprHandle handle) {
 static char
 expr_char(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	switch (node->kind) {
 	case KIND_NULL:  return '\0';
-	case KIND_CONST: return node->name; // We should allow only upper case letters
+	case KIND_CONST:
+		// NOTE: G is also a somewhat reserved name. I could pre-allocate a
+		// special node that is only introduced only via the function that
+		// introduces inner products in the tree. This combined with numerical
+		// IDs should be solid enough.
+		if (node->name == 'X') panic(ERROR_BAD_DATA);
+		return node->name; // We should allow only upper case letters
 	case KIND_VAR:   return 'X';
 	case KIND_ADD:   return '+';
 	case KIND_MUL:   return ' ';
 	case KIND_TRANS: return '\'';
 	case KIND_DIFF:  return 'd';
+	case KIND_INNER: return ':';
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -183,7 +193,8 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 	if (kind != KIND_ADD
 		&& kind != KIND_MUL
 		&& kind != KIND_TRANS
-		&& kind != KIND_DIFF) {
+		&& kind != KIND_DIFF
+		&& kind != KIND_INNER) {
 		return HANDLE_NULL;
 	}
 	ExprHandle arg1 = HANDLE_NULL;
@@ -221,7 +232,7 @@ static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNode *node = expr_get_node(handle);
 
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	if (node->kind == KIND_NULL) {
 		*req_grad = false;
 		return HANDLE_NULL;
@@ -285,6 +296,13 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		// Differential nodes should only be applied to variables node.
 		panic(ERROR_BAD_DATA);
 	}
+	if (node->kind == KIND_INNER) {
+		// NOTE: this could be made to work... But an algorithm for dimension
+		// "unification" is needed.
+		// Inner products are only supposed to appear after the differentiation
+		// phase.
+		panic(ERROR_BAD_DATA);
+	}
 
 	panic(ERROR_BAD_DATA);
 }
@@ -329,20 +347,22 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		}
 	}
 
-	if (node->kind == KIND_MUL) {
+	if (node->kind == KIND_MUL || node->kind == KIND_INNER) {
+		Kind prod_kind = node->kind;
 		bool arg0_is_add = arg0_node->kind == KIND_ADD;
 		bool arg1_is_add = arg1_node->kind == KIND_ADD;
 		if (arg0_is_add && arg1_is_add) {
 			// (A+B) (C+D) => (A+B) C+(A+B) D => A C+B C+A D+B D
+			// (A+B):(C+D) => (A+B):C+(A+B):D => A:C+B:C+A:C+B:D
 			ExprHandle A = expr_distr_internal(arg0_node->arg0, changed);
 			ExprHandle B = expr_distr_internal(arg0_node->arg1, changed);
 			ExprHandle C = expr_distr_internal(arg1_node->arg0, changed);
 			ExprHandle D = expr_distr_internal(arg1_node->arg1, changed);
 
-			ExprHandle AC = expr_make_operator(KIND_MUL, A, C);
-			ExprHandle BC = expr_make_operator(KIND_MUL, B, C);
-			ExprHandle AD = expr_make_operator(KIND_MUL, A, D);
-			ExprHandle BD = expr_make_operator(KIND_MUL, B, D);
+			ExprHandle AC = expr_make_operator(prod_kind, A, C);
+			ExprHandle BC = expr_make_operator(prod_kind, B, C);
+			ExprHandle AD = expr_make_operator(prod_kind, A, D);
+			ExprHandle BD = expr_make_operator(prod_kind, B, D);
 			*changed = true;
 			return expr_make_operator(KIND_ADD,
 				expr_make_operator(KIND_ADD, AC, BC),
@@ -351,24 +371,26 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		}
 		if (arg0_is_add) {
 			// (A+B) C => A C+B C
+			// (A+B):C => A:C+B:C
 			ExprHandle C = expr_distr_internal(node->arg1, changed);
 			ExprHandle A = expr_distr_internal(arg0_node->arg0, changed);
 			ExprHandle B = expr_distr_internal(arg0_node->arg1, changed);
 			*changed = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_MUL, A, C),
-				expr_make_operator(KIND_MUL, B, C)
+				expr_make_operator(prod_kind, A, C),
+				expr_make_operator(prod_kind, B, C)
 			);
 		}
 		if (arg1_is_add) {
 			// A (C+D) => A C+A D
+			// A:(C+D) => A:C+A:D
 			ExprHandle A = expr_distr_internal(node->arg0, changed);
 			ExprHandle C = expr_distr_internal(arg1_node->arg0, changed);
 			ExprHandle D = expr_distr_internal(arg1_node->arg1, changed);
 			*changed = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_MUL, A, C),
-				expr_make_operator(KIND_MUL, A, D)
+				expr_make_operator(prod_kind, A, C),
+				expr_make_operator(prod_kind, A, D)
 			);
 		}
 	}
@@ -397,7 +419,7 @@ expr_distr(ExprHandle handle) {
 static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
 	ExprNode *node = expr_get_node(handle);
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	switch (node->kind) {
 	case KIND_NULL:
 		break;
@@ -407,6 +429,7 @@ expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operan
 		break;
 	case KIND_MUL:
 	case KIND_ADD:
+	case KIND_INNER:
 		expr_stat_internal(node->arg0, operator_count, operand_count);
 		expr_stat_internal(node->arg1, operator_count, operand_count);
 		(*operator_count)++;
@@ -458,6 +481,12 @@ int main(int argc, char const *argv[]) {
 	);
 	res = expr_make_operator(KIND_TRANS, res); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
+	res = expr_distr(res); expr_print(res); expr_stat(res);
+
+	res = expr_make_operator(KIND_INNER,
+		expr_make_operator(KIND_TRANS, expr_make_operand(KIND_CONST, 'G')),
+		res
+	); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	return 0;
 }
