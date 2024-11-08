@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -216,36 +217,40 @@ expr_is_valid(ExprHandle handle) {
 	return handle.value != HANDLE_NULL.value;
 }
 
-// NOTE: this function is where reuse of pieces of the tree would be most
-// beneficial
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNode *node = expr_get_node(handle);
 
 	CHECK_KIND(7);
-	if (node->kind == KIND_NULL || node->kind == KIND_CONST) {
+	if (node->kind == KIND_NULL) {
+		*req_grad = false;
+		return HANDLE_NULL;
+	}
+	if (node->kind == KIND_CONST) {
 		*req_grad = false;
 		return HANDLE_NULL;
 	}
 	if (node->kind == KIND_VAR) {
 		*req_grad = true;
-		return expr_make_operator(KIND_DIFF, /* COPY */ expr_make_operand(KIND_VAR));
+		return expr_make_operator(KIND_DIFF, expr_copy(handle));
 	}
 
 	bool arg0_req_grad = false;
 	bool arg1_req_grad = false;
 	ExprHandle arg0_der = expr_differentiate_internal(node->arg0, &arg0_req_grad);
 	ExprHandle arg1_der = expr_differentiate_internal(node->arg1, &arg1_req_grad);
+	assert(arg0_req_grad == expr_is_valid(arg0_der));
+	assert(arg1_req_grad == expr_is_valid(arg1_der));
 	if (!arg0_req_grad && !arg1_req_grad) {
+		// TODO: free arg0_der and arg1_der
 		return *req_grad = false, HANDLE_NULL;
 	}
 
-	switch (node->kind) {
-	case KIND_TRANS: {
+	if (node->kind == KIND_TRANS) {
 		*req_grad = true;
 		return expr_make_operator(KIND_TRANS, arg0_der);
 	}
-	case KIND_ADD: {
+	if (node->kind == KIND_ADD) {
 		if (arg0_req_grad && arg1_req_grad) {
 			*req_grad = true;
 			return expr_make_operator(KIND_ADD, arg0_der, arg1_der);
@@ -259,27 +264,28 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 			return arg1_der;
 		}
 	}
-	case KIND_MUL: {
+	if (node->kind == KIND_MUL) {
 		if (arg0_req_grad && arg1_req_grad) {
 			*req_grad = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_MUL, arg0_der, /* COPY */ expr_copy(node->arg1)),
-				expr_make_operator(KIND_MUL, /* COPY */ expr_copy(node->arg0), arg1_der)
+				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
+				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
 			);
 		}
 		if (arg0_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, arg0_der, /* COPY */ expr_copy(node->arg1));
+			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
 		}
 		if (arg1_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, /* COPY */ expr_copy(node->arg0), arg1_der);
+			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
 		}
 	}
-	case KIND_DIFF:
+	if (node->kind == KIND_DIFF) {
 		// Differential nodes should only be applied to variables node.
-		;
+		panic(ERROR_BAD_DATA);
 	}
+
 	panic(ERROR_BAD_DATA);
 }
 
@@ -290,7 +296,9 @@ expr_differentiate(ExprHandle handle) {
 }
 
 // TODO: rename this to expr_distribute_internal and call it in a function that
-// loops until no more changes are made.
+// loops until no more changes are made. How do I detect if a change has been
+// made? The easiest way is to pass a pointer to a boolean down the recursion
+// initialize it as false and set it as true every time a change is made.
 static ExprHandle
 expr_distribute(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
@@ -363,7 +371,10 @@ expr_distribute(ExprHandle handle) {
 		}
 	}
 
-	return /* COPY (for VAR and CONST) */ expr_make_node(node->kind, node->name,
+	if (node->kind == KIND_CONST || node->kind == KIND_VAR) {
+		return expr_copy(handle);
+	}
+	return expr_make_node(node->kind, node->name,
 		expr_distribute(node->arg0), expr_distribute(node->arg1)
 	);
 }
@@ -398,7 +409,7 @@ expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operan
 	return;
 }
 
-static uint16_t
+static void
 expr_stat(ExprHandle handle) {
 	uint16_t operator_count = 0, operand_count = 0;
 	expr_stat_internal(handle, &operator_count, &operand_count);
