@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdnoreturn.h>
 
@@ -84,16 +85,16 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // ecc... Would make things more ergonomic. If names are generated automatically
 // a numerical ID shall be used instead.
 typedef struct ExprNode {
-	Kind kind;       // TODO: this can be made smaller
+	uint8_t kind;
 	char name;       // To distinguish constants.
-	char padding[3];
+	// char padding[1];
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
 
 static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
 
-static ExprNode *
+static const ExprNode *
 expr_get_node(ExprHandle handle) {
 	return node_pool + handle.value;
 }
@@ -231,7 +232,7 @@ expr_is_valid(ExprHandle handle) {
 
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
-	ExprNode *node = expr_get_node(handle);
+	const ExprNode *node = expr_get_node(handle);
 
 	CHECK_KIND(8);
 	if (node->kind == KIND_NULL) {
@@ -302,6 +303,7 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 			// TODO: implement this.
 			// TODO: since we hace introduced scalars a unification algorithm
 			// for matrix dimensions is needed.
+			// d(X:Y) = dX:Y+X:dY
 			panic(ERROR_BAD_DATA);
 		}
 		if (arg0_req_grad) {
@@ -428,7 +430,7 @@ expr_distr(ExprHandle handle) {
 
 static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
-	ExprNode *node = expr_get_node(handle);
+	const ExprNode *node = expr_get_node(handle);
 	CHECK_KIND(8);
 	switch (node->kind) {
 	case KIND_NULL:
@@ -464,6 +466,86 @@ expr_stat(ExprHandle handle) {
 	printf("#operand=%d #operator=%d\n", operand_count, operator_count);
 }
 
+// TODO: to avoid having to remember which unary operations have the argument on
+// the left or the right a expr_get_argument function could be handy to avoid
+// trivial mistakes.
+
+// TODO: if a node (different from HANDLE_NULL) point to itself it can cause
+// function recursive function to stack overflow. This case should be catched
+// and reported. Is there any other potential infinite loop (without recursion?)
+
+static bool
+expr_has_differential(ExprHandle handle) {
+	const ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return false;
+	}
+	if (node->kind == KIND_DIFF) {
+		return true;
+	}
+	return expr_has_differential(node->arg0)
+		|| expr_has_differential(node->arg1);
+}
+
+// TODO: use the DFS trick to avoid having to call expr_has_differential.
+static ExprHandle
+expr_expose_differentials(ExprHandle handle) {
+	const ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return HANDLE_NULL;
+	}
+
+	if (node->kind == KIND_ADD) {
+		return expr_make_operator(KIND_ADD,
+			expr_expose_differentials(node->arg0),
+			expr_expose_differentials(node->arg1)
+		);
+	}
+
+	// NOTE: the algorithm could support the differential being in the left or
+	// right argument of the inner product, but for simplicity we are going to
+	// assume that it can only be on the right.
+	if (node->kind == KIND_INNER) {
+		ExprHandle A = expr_copy(node->arg0);
+		ExprHandle arg1 = node->arg1;
+		const ExprNode *arg1_node = NULL;
+		while (arg1_node = expr_get_node(arg1), arg1_node->kind != KIND_DIFF) {
+			ExprHandle B = arg1_node->arg0;
+			ExprHandle C = arg1_node->arg1;
+			if (arg1_node->kind == KIND_MUL) {
+				bool diff_on_the_lhs = expr_has_differential(B);
+				if (diff_on_the_lhs) {
+					// A:B C => B' A:C
+					A = expr_make_operator(KIND_MUL,
+						A,
+						expr_make_operator(KIND_TRANS, expr_copy(C))
+					);
+					arg1 = B;
+				} else {
+					// A:B C => A C':B
+					A = expr_make_operator(KIND_MUL,
+						expr_make_operator(KIND_TRANS, expr_copy(B)),
+						A
+					);
+					arg1 = C;
+				}
+			} else if (arg1_node->kind == KIND_TRANS) {
+				// A:B' => A':B
+				A = expr_make_operator(KIND_TRANS, A);
+				arg1 = B;
+			} else goto panic;
+		}
+		assert(arg1_node->kind == KIND_DIFF);
+		ExprHandle new_arg1 = expr_copy(arg1);
+		return expr_make_operator(KIND_INNER, A, new_arg1);
+	}
+
+panic:
+	// The expression needs to be in "distributed normal form" and contain a
+	// differentiated variable in each inner product.
+	panic(ERROR_BAD_DATA);
+}
+
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
 
@@ -490,10 +572,12 @@ int main(int argc, char const *argv[]) {
 		expr_make_operator(KIND_MUL, lhs, rhs)
 	);
 	res = expr_make_operator(KIND_INNER,
-		expr_make_operator(KIND_TRANS, expr_make_operand(KIND_CONST, 'G')),
+		expr_make_operand(KIND_CONST, 'G'),
 		expr_make_operator(KIND_TRANS, res)
 	); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
+	res = expr_distr(res); expr_print(res); expr_stat(res);
+	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 
 	return 0;
