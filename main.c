@@ -511,7 +511,8 @@ expr_expose_differentials(ExprHandle handle) {
 
 	// NOTE: the algorithm could support the differential being in the left or
 	// right argument of the inner product, but for simplicity we are going to
-	// assume that it can only be on the right.
+	// assume that it can only be on the right. But the inner product is
+	// commutative so it would not be that hard to implement.
 	if (node->kind == KIND_INNER) {
 		ExprHandle A = expr_copy(node->arg0);
 		ExprHandle arg1 = node->arg1;
@@ -587,7 +588,18 @@ int main(int argc, char const *argv[]) {
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 
-	// TODO: implement the grouping algorithm.
+	// TODO: implement the grouping algorithm (assuming distributive normal
+	// form?)
+
+	// For grouping commutative operations like the addition and Hadamard's
+	// product requires sorting the operand. Grouping is the opposite of
+	// distribution so the set of rules I have to care about are the same (just
+	// inverted.) So we have grouping for transpose and addition and
+	// multiplication and groupping for the two multiplications (inner and
+	// matrix) w.r.t addition.
+
+	// TODO: transpose interact with the inner product in the following ways
+	// (A:B)' => A:B and A':B' => A:B
 
 	return 0;
 }
