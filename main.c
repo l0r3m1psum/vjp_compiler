@@ -84,6 +84,12 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // character, also probably generating names automatically like A000, A001,
 // ecc... Would make things more ergonomic. If names are generated automatically
 // a numerical ID shall be used instead.
+// NOTE: there are two functions that need to know where the differential are
+// down the tree (i.e. expr_differentiate_internal and
+// expr_expose_differentials) the req_grad bit could be added by
+// expr_distr_internal when it buidls the tree from the bottom so that it is a
+// property calculated once and for all (note that the various functions still
+// need to propagte this information arround when contructing new nodes.)
 typedef struct ExprNode {
 	uint8_t kind;
 	char name;       // To distinguish constants.
@@ -94,6 +100,7 @@ typedef struct ExprNode {
 
 static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
 
+// NOTE: the struture is so small that I could also return it by value...
 static const ExprNode *
 expr_get_node(ExprHandle handle) {
 	return node_pool + handle.value;
@@ -579,6 +586,8 @@ int main(int argc, char const *argv[]) {
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
+
+	// TODO: implement the grouping algorithm.
 
 	return 0;
 }
