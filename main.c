@@ -167,13 +167,37 @@ expr_print(ExprHandle handle) {
 
 static uint16_t node_pool_watermark = 1;
 
+// Basically pointer equality
+static bool
+expr_is_equal(ExprHandle arg0, ExprHandle arg1) {
+	return arg0.value == arg1.value;
+}
+
+static bool
+expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
+	// TODO: implement this, maybe
+	panic(ERROR_BAD_ARG);
+}
+
+static bool
+expr_is_valid(ExprHandle handle) {
+	return expr_is_equal(handle, HANDLE_NULL);
+}
+
 static ExprHandle
 expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 	if (node_pool_watermark == HANDLE_MAX_VALUE) {
 		panic(ERROR_BAD_ALLOC);
 	}
+	bool both_valid = expr_is_valid(arg0) && expr_is_valid(arg1);
+	if (both_valid && expr_is_equal(arg0, arg1)) {
+		panic(ERROR_BAD_ARG);
+	}
 	ExprHandle res = (ExprHandle){node_pool_watermark++};
-	node_pool[res.value] = (ExprNode) {
+	if (both_valid && (expr_is_equal(arg0, res) || expr_is_equal(arg1, res))) {
+		panic(ERROR_BAD_ARG);
+	}
+	node_pool[res.value] = (ExprNode){
 		.kind = kind,
 		.name = name,
 		.arg0 = arg0,
@@ -230,11 +254,6 @@ expr_copy(ExprHandle handle) {
 	ExprHandle arg0_copy = expr_copy(node->arg0);
 	ExprHandle arg1_copy = expr_copy(node->arg1);
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
-}
-
-static bool
-expr_is_valid(ExprHandle handle) {
-	return handle.value != HANDLE_NULL.value;
 }
 
 static ExprHandle
