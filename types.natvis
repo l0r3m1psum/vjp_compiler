@@ -20,7 +20,7 @@ https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-n
     </Expand>
   </Type>
   <Type Name="ExprHandle">
-    <DisplayString>{{ handle={value} }}</DisplayString>
+    <DisplayString>{{ handle={value} {(Kind) node_pool[value].kind}}}</DisplayString>
     <Expand>
       <ExpandedItem>node_pool[value]</ExpandedItem>
     </Expand>
