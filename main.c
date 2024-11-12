@@ -174,14 +174,22 @@ expr_is_equal(ExprHandle arg0, ExprHandle arg1) {
 }
 
 static bool
-expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
-	// TODO: implement this, maybe
-	panic(ERROR_BAD_ARG);
+expr_is_valid(ExprHandle handle) {
+	return !expr_is_equal(handle, HANDLE_NULL);
 }
 
 static bool
-expr_is_valid(ExprHandle handle) {
-	return expr_is_equal(handle, HANDLE_NULL);
+expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
+	const ExprNode *arg0_node = expr_get_node(arg0);
+	const ExprNode *arg1_node = expr_get_node(arg1);
+	if (!expr_is_valid(arg0) && !expr_is_valid(arg1)) {
+		return true;
+	} else if (arg0_node->kind != arg1_node->kind) {
+		return false;
+	} else {
+		return expr_structural_equal(arg0_node->arg0, arg1_node->arg0)
+			&& expr_structural_equal(arg0_node->arg1, arg1_node->arg1);
+	}
 }
 
 static ExprHandle
@@ -390,6 +398,8 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		bool arg0_is_add = arg0_node->kind == KIND_ADD;
 		bool arg1_is_add = arg1_node->kind == KIND_ADD;
 		if (arg0_is_add && arg1_is_add) {
+			// Up to commutative property it is equivalent to multiply starting
+			// from the left or the right.
 			// (A+B) (C+D) => (A+B) C+(A+B) D => A C+B C+A D+B D
 			// (A+B):(C+D) => (A+B):C+(A+B):D => A:C+B:C+A:C+B:D
 			ExprHandle A = expr_distr_internal(arg0_node->arg0, changed);
@@ -448,6 +458,7 @@ expr_distr(ExprHandle handle) {
 	while (changed) {
 		changed = false;
 		res = expr_distr_internal(old_res, &changed);
+		printf("\t"); expr_print(res);
 		// TODO: free old_res
 		old_res = res;
 	}
@@ -489,7 +500,8 @@ static void
 expr_stat(ExprHandle handle) {
 	uint16_t operator_count = 0, operand_count = 0;
 	expr_stat_internal(handle, &operator_count, &operand_count);
-	printf("#operand=%d #operator=%d\n", operand_count, operator_count);
+	uint32_t sum = operator_count + operand_count;
+	printf("#operand=%d #operator=%d sum=%d\n", operand_count, operator_count, sum);
 }
 
 // TODO: to avoid having to remember which unary operations have the argument on
@@ -514,6 +526,10 @@ expr_has_differential(ExprHandle handle) {
 }
 
 // TODO: use the DFS trick to avoid having to call expr_has_differential.
+// NOTE: this function requires a distribution round afterwards for the nested
+// transpositions. It could be applied every time we move an operation from the
+// other side of the inner product to reduce the number of copies of the entire
+// tree afterwards.
 static ExprHandle
 expr_expose_differentials(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
@@ -573,26 +589,94 @@ panic:
 	panic(ERROR_BAD_DATA);
 }
 
+// Sicuramente andrà fatto un un while finché non si può più raggruppare.
+// Problema 1. ordinare le sequenze di nodi addizione
+// Problema 2. espressioni come X + X vanno raggruppate come X (I + I)?
+static ExprHandle
+expr_groupby(ExprHandle handle) {
+	// Assimiamo la forma normale distribuita?
+	// F' E' G' C':dX+F' E' G' X':dX+X' F' E' G':dX+B' F' E' G':dX
+	// (F' E' G' C'+F' E' G' X'+X' F' E' G'+B' F' E' G'):dX
+	// ((C G E F)'+(X G E F)'+(G E F X)'+(G E F B)'):dX
+	// (C G E F+X G E F+G E F X+G E F B)':dX
+	// ((C+X) G E F+G E F (X+B))':dX
+	const ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return HANDLE_NULL;
+	}
+
+	const ExprNode *arg0_node = expr_get_node(node->arg0);
+	const ExprNode *arg1_node = expr_get_node(node->arg1);
+	if (node->kind == KIND_ADD) {
+		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
+			return expr_make_operator(KIND_TRANS,
+				expr_make_operator(KIND_ADD,
+					expr_groupby(arg0_node->arg0),
+					expr_groupby(arg1_node->arg0)
+				)
+			);
+		}
+		// NOTE: this works also for normal multiplication
+		if (arg0_node->kind == KIND_INNER && arg1_node->kind == KIND_INNER) {
+			if (expr_structural_equal(arg0_node->arg0, arg1_node->arg0)) {
+				return expr_make_operator(KIND_INNER,
+					expr_copy(arg0_node->arg0),
+					expr_make_operator(KIND_ADD,
+						expr_groupby(arg0_node->arg1),
+						expr_groupby(arg1_node->arg1))
+				);
+			}
+			if (expr_structural_equal(arg0_node->arg1, arg1_node->arg1)) {
+				return expr_make_operator(KIND_INNER,
+					expr_make_operator(KIND_ADD,
+						expr_groupby(arg0_node->arg0),
+						expr_groupby(arg1_node->arg0)
+					),
+					expr_copy(arg0_node->arg1)
+				);
+			}
+		}
+	}
+	if (node->kind == KIND_MUL) {
+		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
+			return expr_make_operator(KIND_TRANS,
+				expr_make_operator(KIND_MUL,
+					expr_groupby(arg1_node->arg0),
+					expr_groupby(arg0_node->arg0)
+				)
+			);
+		}
+	}
+
+	if (node->kind == KIND_CONST || node->kind == KIND_VAR || node->kind == KIND_DIFF) {
+		return expr_copy(handle);
+	}
+
+	// FIXME: Here the differetial looses the argument but why???
+	return expr_make_operator(node->kind,
+		expr_groupby(node->arg0),
+		expr_groupby(node->arg1)
+	);
+}
+
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
+
+// TODO: print graphviz?
 
 int main(int argc, char const *argv[]) {
 	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
-	ExprHandle lhs = expr_make_operator(
-		KIND_ADD, 
+	ExprHandle lhs = expr_make_operator(KIND_ADD,
 		expr_make_operand(KIND_VAR),
 		expr_make_operand(KIND_CONST, 'B')
 	);
-	ExprHandle rhs = expr_make_operator(
-		KIND_ADD,
+	ExprHandle rhs = expr_make_operator(KIND_ADD,
 		expr_make_operand(KIND_CONST, 'C'),
 		expr_make_operand(KIND_VAR)
 	);
-	ExprHandle res = expr_make_operator(
-		KIND_MUL,
-		expr_make_operator(
-			KIND_MUL,
+	ExprHandle res = expr_make_operator(KIND_MUL,
+		expr_make_operator(KIND_MUL,
 			expr_make_operand(KIND_CONST, 'E'),
 			expr_make_operand(KIND_CONST, 'F')
 		),
@@ -606,6 +690,12 @@ int main(int argc, char const *argv[]) {
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
+	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res);
 
 	// TODO: implement the grouping algorithm (assuming distributive normal
 	// form?)
