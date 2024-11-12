@@ -447,7 +447,8 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		return expr_copy(handle);
 	}
 	return expr_make_node(node->kind, node->name,
-		expr_distr_internal(node->arg0, changed), expr_distr_internal(node->arg1, changed)
+		expr_distr_internal(node->arg0, changed),
+		expr_distr_internal(node->arg1, changed)
 	);
 }
 
