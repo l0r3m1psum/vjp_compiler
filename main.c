@@ -332,6 +332,7 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		// Differential nodes should only be applied to variables node.
 		panic(ERROR_BAD_DATA);
 	}
+	// TODO: merge with the multiplication branch
 	if (node->kind == KIND_INNER) {
 		if (arg0_req_grad && arg1_req_grad) {
 			// TODO: implement this.
@@ -594,7 +595,7 @@ panic:
 // Problema 1. ordinare le sequenze di nodi addizione
 // Problema 2. espressioni come X + X vanno raggruppate come X (I + I)?
 static ExprHandle
-expr_groupby(ExprHandle handle) {
+expr_groupby_internal(ExprHandle handle, bool *changed) {
 	// Assimiamo la forma normale distribuita?
 	// F' E' G' C':dX+F' E' G' X':dX+X' F' E' G':dX+B' F' E' G':dX
 	// (F' E' G' C'+F' E' G' X'+X' F' E' G'+B' F' E' G'):dX
@@ -608,30 +609,35 @@ expr_groupby(ExprHandle handle) {
 
 	const ExprNode *arg0_node = expr_get_node(node->arg0);
 	const ExprNode *arg1_node = expr_get_node(node->arg1);
+	Kind arg0_kind = arg0_node->kind;
+	Kind arg1_kind = arg1_node->kind;
 	if (node->kind == KIND_ADD) {
 		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
+			*changed = true;
 			return expr_make_operator(KIND_TRANS,
 				expr_make_operator(KIND_ADD,
-					expr_groupby(arg0_node->arg0),
-					expr_groupby(arg1_node->arg0)
+					expr_groupby_internal(arg0_node->arg0, changed),
+					expr_groupby_internal(arg1_node->arg0, changed)
 				)
 			);
 		}
-		// NOTE: this works also for normal multiplication
-		if (arg0_node->kind == KIND_INNER && arg1_node->kind == KIND_INNER) {
+		if (arg0_kind == arg1_kind && (arg0_kind == KIND_MUL || arg1_kind == KIND_INNER)) {
+			Kind prod_kind = arg0_kind;
 			if (expr_structural_equal(arg0_node->arg0, arg1_node->arg0)) {
-				return expr_make_operator(KIND_INNER,
+				*changed = true;
+				return expr_make_operator(prod_kind,
 					expr_copy(arg0_node->arg0),
 					expr_make_operator(KIND_ADD,
-						expr_groupby(arg0_node->arg1),
-						expr_groupby(arg1_node->arg1))
+						expr_groupby_internal(arg0_node->arg1, changed),
+						expr_groupby_internal(arg1_node->arg1, changed))
 				);
 			}
 			if (expr_structural_equal(arg0_node->arg1, arg1_node->arg1)) {
-				return expr_make_operator(KIND_INNER,
+				*changed = true;
+				return expr_make_operator(prod_kind,
 					expr_make_operator(KIND_ADD,
-						expr_groupby(arg0_node->arg0),
-						expr_groupby(arg1_node->arg0)
+						expr_groupby_internal(arg0_node->arg0, changed),
+						expr_groupby_internal(arg1_node->arg0, changed)
 					),
 					expr_copy(arg0_node->arg1)
 				);
@@ -640,10 +646,11 @@ expr_groupby(ExprHandle handle) {
 	}
 	if (node->kind == KIND_MUL) {
 		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
+			*changed = true;
 			return expr_make_operator(KIND_TRANS,
 				expr_make_operator(KIND_MUL,
-					expr_groupby(arg1_node->arg0),
-					expr_groupby(arg0_node->arg0)
+					expr_groupby_internal(arg1_node->arg0, changed),
+					expr_groupby_internal(arg0_node->arg0, changed)
 				)
 			);
 		}
@@ -653,20 +660,35 @@ expr_groupby(ExprHandle handle) {
 		return expr_copy(handle);
 	}
 
-	// FIXME: Here the differetial looses the argument but why???
+	// FIXME: Here the differetial looses (if we do not check before) the argument but why???
 	return expr_make_operator(node->kind,
-		expr_groupby(node->arg0),
-		expr_groupby(node->arg1)
+		expr_groupby_internal(node->arg0, changed),
+		expr_groupby_internal(node->arg1, changed)
 	);
+}
+
+static ExprHandle
+expr_groupby(ExprHandle handle) {
+	bool changed = true;
+	ExprHandle res = HANDLE_NULL, old_res = handle;
+	while (changed) {
+		changed = false;
+		res = expr_groupby_internal(old_res, &changed);
+		printf("\t"); expr_print(res);
+		// TODO: free old_res
+		old_res = res;
+	}
+	return res;
 }
 
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
 
 // TODO: print graphviz?
+// TODO: stampare stringa per verificare il risultato su https://matrixcalculus.org
 
 int main(int argc, char const *argv[]) {
-	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
+	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	ExprHandle lhs = expr_make_operator(KIND_ADD,
 		expr_make_operand(KIND_VAR),
@@ -691,12 +713,7 @@ int main(int argc, char const *argv[]) {
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
-	res = expr_groupby(res); expr_print(res);
-	res = expr_groupby(res); expr_print(res);
-	res = expr_groupby(res); expr_print(res);
-	res = expr_groupby(res); expr_print(res);
-	res = expr_groupby(res); expr_print(res);
-	res = expr_groupby(res); expr_print(res);
+	res = expr_groupby(res); expr_print(res); expr_stat(res);
 
 	// TODO: implement the grouping algorithm (assuming distributive normal
 	// form?)
