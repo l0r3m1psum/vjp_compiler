@@ -113,12 +113,8 @@ expr_char(ExprHandle handle) {
 	switch (node->kind) {
 	case KIND_NULL:  return '\0';
 	case KIND_CONST:
-		// NOTE: G is also a somewhat reserved name. I could pre-allocate a
-		// special node that is only introduced only via the function that
-		// introduces inner products in the tree. This combined with numerical
-		// IDs should be solid enough.
 		if (node->name == 'X') panic(ERROR_BAD_DATA);
-		return node->name; // We should allow only upper case letters
+		return node->name; // NOTE: We should allow only upper case letters
 	case KIND_VAR:   return 'X';
 	case KIND_ADD:   return '+';
 	case KIND_MUL:   return ' ';
@@ -311,44 +307,29 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 			return arg1_der;
 		}
 	}
-	if (node->kind == KIND_MUL) {
+	if (node->kind == KIND_MUL || node->kind == KIND_INNER) {
+		Kind prod_kind = node->kind;
+		// TODO: since we hace introduced scalars a unification algorithm
+		// for matrix dimensions is needed.
 		if (arg0_req_grad && arg1_req_grad) {
 			*req_grad = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1)),
-				expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der)
+				expr_make_operator(prod_kind, arg0_der, expr_copy(node->arg1)),
+				expr_make_operator(prod_kind, expr_copy(node->arg0), arg1_der)
 			);
 		}
 		if (arg0_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, arg0_der, expr_copy(node->arg1));
+			return expr_make_operator(prod_kind, arg0_der, expr_copy(node->arg1));
 		}
 		if (arg1_req_grad) {
 			*req_grad = true;
-			return expr_make_operator(KIND_MUL, expr_copy(node->arg0), arg1_der);
+			return expr_make_operator(prod_kind, expr_copy(node->arg0), arg1_der);
 		}
 	}
 	if (node->kind == KIND_DIFF) {
 		// Differential nodes should only be applied to variables node.
 		panic(ERROR_BAD_DATA);
-	}
-	// TODO: merge with the multiplication branch
-	if (node->kind == KIND_INNER) {
-		if (arg0_req_grad && arg1_req_grad) {
-			// TODO: implement this.
-			// TODO: since we hace introduced scalars a unification algorithm
-			// for matrix dimensions is needed.
-			// d(X:Y) = dX:Y+X:dY
-			panic(ERROR_BAD_DATA);
-		}
-		if (arg0_req_grad) {
-			*req_grad = true;
-			return expr_make_operator(KIND_INNER, arg0_der, expr_copy(node->arg1));
-		}
-		if (arg1_req_grad) {
-			*req_grad = true;
-			return expr_make_operator(KIND_INNER, expr_copy(node->arg0), arg1_der);
-		}
 	}
 
 	panic(ERROR_BAD_DATA);
@@ -370,6 +351,8 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		return HANDLE_NULL;
 	}
 
+	// TODO: transpose interact with the inner product in the following ways
+	// (A:B)' => A:B and A':B' => A:B
 	if (node->kind == KIND_TRANS) {
 		if (arg0_node->kind == KIND_TRANS) {
 			// (A')' => A
@@ -591,17 +574,14 @@ panic:
 	panic(ERROR_BAD_DATA);
 }
 
-// Sicuramente andrà fatto un un while finché non si può più raggruppare.
-// Problema 1. ordinare le sequenze di nodi addizione
-// Problema 2. espressioni come X + X vanno raggruppate come X (I + I)?
+// If we assume the expression to be in "distributive normal form" the problem
+// is one of multivariate polynomial factoring. Grobner basis are a good topic
+// to take inspiration from (keeping in mind that matrix multiplication is not
+// commutative.) The polynomial need to be ordered in some way so that all
+// common factors appear near each other and are easy to factor. There also need
+// to be a way to factor expressions like X+X in X(I+I).
 static ExprHandle
-expr_groupby_internal(ExprHandle handle, bool *changed) {
-	// Assimiamo la forma normale distribuita?
-	// F' E' G' C':dX+F' E' G' X':dX+X' F' E' G':dX+B' F' E' G':dX
-	// (F' E' G' C'+F' E' G' X'+X' F' E' G'+B' F' E' G'):dX
-	// ((C G E F)'+(X G E F)'+(G E F X)'+(G E F B)'):dX
-	// (C G E F+X G E F+G E F X+G E F B)':dX
-	// ((C+X) G E F+G E F (X+B))':dX
+expr_factor_internal(ExprHandle handle, bool *changed) {
 	const ExprNode *node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
@@ -616,8 +596,8 @@ expr_groupby_internal(ExprHandle handle, bool *changed) {
 			*changed = true;
 			return expr_make_operator(KIND_TRANS,
 				expr_make_operator(KIND_ADD,
-					expr_groupby_internal(arg0_node->arg0, changed),
-					expr_groupby_internal(arg1_node->arg0, changed)
+					expr_factor_internal(arg0_node->arg0, changed),
+					expr_factor_internal(arg1_node->arg0, changed)
 				)
 			);
 		}
@@ -628,16 +608,16 @@ expr_groupby_internal(ExprHandle handle, bool *changed) {
 				return expr_make_operator(prod_kind,
 					expr_copy(arg0_node->arg0),
 					expr_make_operator(KIND_ADD,
-						expr_groupby_internal(arg0_node->arg1, changed),
-						expr_groupby_internal(arg1_node->arg1, changed))
+						expr_factor_internal(arg0_node->arg1, changed),
+						expr_factor_internal(arg1_node->arg1, changed))
 				);
 			}
 			if (expr_structural_equal(arg0_node->arg1, arg1_node->arg1)) {
 				*changed = true;
 				return expr_make_operator(prod_kind,
 					expr_make_operator(KIND_ADD,
-						expr_groupby_internal(arg0_node->arg0, changed),
-						expr_groupby_internal(arg1_node->arg0, changed)
+						expr_factor_internal(arg0_node->arg0, changed),
+						expr_factor_internal(arg1_node->arg0, changed)
 					),
 					expr_copy(arg0_node->arg1)
 				);
@@ -649,31 +629,30 @@ expr_groupby_internal(ExprHandle handle, bool *changed) {
 			*changed = true;
 			return expr_make_operator(KIND_TRANS,
 				expr_make_operator(KIND_MUL,
-					expr_groupby_internal(arg1_node->arg0, changed),
-					expr_groupby_internal(arg0_node->arg0, changed)
+					expr_factor_internal(arg1_node->arg0, changed),
+					expr_factor_internal(arg0_node->arg0, changed)
 				)
 			);
 		}
 	}
 
-	if (node->kind == KIND_CONST || node->kind == KIND_VAR || node->kind == KIND_DIFF) {
+	if (node->kind == KIND_CONST || node->kind == KIND_VAR) {
 		return expr_copy(handle);
 	}
 
-	// FIXME: Here the differetial looses (if we do not check before) the argument but why???
-	return expr_make_operator(node->kind,
-		expr_groupby_internal(node->arg0, changed),
-		expr_groupby_internal(node->arg1, changed)
+	return expr_make_node(node->kind, node->name,
+		expr_factor_internal(node->arg0, changed),
+		expr_factor_internal(node->arg1, changed)
 	);
 }
 
 static ExprHandle
-expr_groupby(ExprHandle handle) {
+expr_factor(ExprHandle handle) {
 	bool changed = true;
 	ExprHandle res = HANDLE_NULL, old_res = handle;
 	while (changed) {
 		changed = false;
-		res = expr_groupby_internal(old_res, &changed);
+		res = expr_factor_internal(old_res, &changed);
 		printf("\t"); expr_print(res);
 		// TODO: free old_res
 		old_res = res;
@@ -709,24 +688,13 @@ int main(int argc, char const *argv[]) {
 		expr_make_operand(KIND_CONST, 'G'),
 		expr_make_operator(KIND_TRANS, res)
 	); expr_print(res); expr_stat(res);
+	// tr(G'*(E*F*(X+B)*(C+X))')
+	// G:(E F (X+B) (C+X))'
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
-	res = expr_groupby(res); expr_print(res); expr_stat(res);
-
-	// TODO: implement the grouping algorithm (assuming distributive normal
-	// form?)
-
-	// For grouping commutative operations like the addition and Hadamard's
-	// product requires sorting the operand. Grouping is the opposite of
-	// distribution so the set of rules I have to care about are the same (just
-	// inverted.) So we have grouping for transpose and addition and
-	// multiplication and groupping for the two multiplications (inner and
-	// matrix) w.r.t addition.
-
-	// TODO: transpose interact with the inner product in the following ways
-	// (A:B)' => A:B and A':B' => A:B
+	res = expr_factor(res); expr_print(res); expr_stat(res);
 
 	return 0;
 }
