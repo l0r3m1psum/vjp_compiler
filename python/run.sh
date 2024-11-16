@@ -1,0 +1,1 @@
+OMP_PREFIX=openmp14/usr/local TORCH_LOGS="compiled_autograd,all" python compile.py

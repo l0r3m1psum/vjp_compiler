@@ -11,7 +11,8 @@ if sys.platform == 'darwin' and 'OMP_PREFIX' not in os.environ:
 		"and unpack it to a local directory with the following commands:\n"
 		"curl -O https://mac.r-project.org/openmp/openmp-14.0.6-darwin20-Release.tar.gz\n"
 		"tar fvxz openmp-14.0.6-darwin20-Release.tar.gz -C openmp14\n"
-		"then you can set the environment variable OMP_PREFIX=openmp14")
+		"then you can set the environment variable "
+		"OMP_PREFIX=openmp14/usr/local")
 
 import torch
 
@@ -22,7 +23,8 @@ x = torch.ones(3)
 y = torch.ones(4)
 
 def l(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-	y_hat = W2@torch.nn.functional.sigmoid(W1@x)
+	h = torch.nn.functional.sigmoid(W1@x)
+	y_hat = W2@h
 	return torch.nn.functional.mse_loss(y_hat, y)
 
 l_compiled = torch.compile(l, fullgraph=True)
