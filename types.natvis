@@ -9,19 +9,18 @@ https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-n
       Expression="kind != KIND_NULL
             &amp;&amp; kind != KIND_CONST
             &amp;&amp; kind != KIND_VAR"/>
-     <DisplayString>{{ kind={kind} }}</DisplayString>
-     <Expand>
-        <Item Name="[kind]">kind</Item>
-        <Item Name="[name]" Condition="kind == KIND_CONST">name</Item>
-        <Item Name="[req_grad]">req_grad</Item>
-        <Item Name="[has_dif]" Condition="kind == KIND_VAR">req_grad</Item>
-        <Item Name="[arg0]" Condition="has_at_least_one_arg()">arg0</Item>
-        <Item Name="[arg1]" Condition="has_at_least_one_arg()
-          &amp;&amp; kind != KIND_TRANS">arg1</Item>
-     </Expand>
+    <DisplayString>{{ kind={(Kind) kind} }}</DisplayString>
+    <Expand>
+      <Item Name="[kind]">(Kind) kind</Item>
+      <Item Name="[name]" Condition="kind == KIND_CONST">name</Item>
+      <Item Name="[arg0]" Condition="has_at_least_one_arg()
+        &amp;&amp; kind != KIND_DIFF">arg0</Item>
+      <Item Name="[arg1]" Condition="has_at_least_one_arg()
+        &amp;&amp; kind != KIND_TRANS">arg1</Item>
+    </Expand>
   </Type>
   <Type Name="ExprHandle">
-    <DisplayString>{{ handle={value} }}</DisplayString>
+    <DisplayString>{{ handle={value} {(Kind) node_pool[value].kind}}}</DisplayString>
     <Expand>
       <ExpandedItem>node_pool[value]</ExpandedItem>
     </Expand>
