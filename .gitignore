@@ -1,0 +1,8 @@
+*.exe
+*.ilk
+*.pdb
+*.obj
+.vs/
+python/torch_compile_debug/
+python/torch_logs_out.txt
+python/venv/
