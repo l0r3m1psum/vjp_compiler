@@ -1,2 +1,4 @@
-torch==2.2
+torch==2.6
 numpy==1.26
+expecttest==0.2
+pydot==3.0

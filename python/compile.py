@@ -15,6 +15,8 @@ if sys.platform == 'darwin' and 'OMP_PREFIX' not in os.environ:
 		"OMP_PREFIX=openmp14/usr/local")
 
 import torch
+import torch._inductor.config
+torch._inductor.config.debug = True
 
 W1 = torch.ones(4,3, requires_grad=True)
 W2 = torch.ones(4,4, requires_grad=True)
@@ -27,5 +29,6 @@ def l(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 	y_hat = W2@h
 	return torch.nn.functional.mse_loss(y_hat, y)
 
-l_compiled = torch.compile(l, fullgraph=True)
+l_compiled = torch.compile(l, fullgraph=True, options={'trace.enabled':True,
+	'trace.graph_diagram':True})
 l_compiled(x, y).backward()
