@@ -25,4 +25,10 @@ https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-n
       <ExpandedItem>node_pool[value]</ExpandedItem>
     </Expand>
   </Type>
+  <Type Name="ParserState">
+    <DisplayString>{{ tokens={tokens} }}</DisplayString>
+    <Expand>
+      <Item Name="[remaining]">tokens+current</Item>
+    </Expand>
+  </Type>
 </AutoVisualizer>
