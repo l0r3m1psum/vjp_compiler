@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
 https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects
+https://learn.microsoft.com/en-us/visualstudio/debugger/format-specifiers-in-cpp
 -->
 <AutoVisualizer
   xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
@@ -23,6 +24,12 @@ https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-n
     <DisplayString>{{ handle={value} {(Kind) node_pool[value].kind}}}</DisplayString>
     <Expand>
       <ExpandedItem>node_pool[value]</ExpandedItem>
+    </Expand>
+  </Type>
+  <Type Name="ParserState">
+    <DisplayString>{{ tokens={tokens} }}</DisplayString>
+    <Expand>
+      <Item Name="[remaining]">tokens+current</Item>
     </Expand>
   </Type>
 </AutoVisualizer>

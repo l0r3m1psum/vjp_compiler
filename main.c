@@ -7,6 +7,7 @@
 
 noreturn void exit(int);
 #include <stdio.h>
+size_t strlen(const char *);
 
 #define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
 
@@ -30,7 +31,9 @@ panic(enum Error err) {
 	}
 	fflush(stdout);
 // We assume that each platform compiles with it compiler for simplicity
-#if defined(_WIN64)
+#if defined(REPL)
+	;
+#elif defined(_WIN64)
 	// if (IsDebuggerPresent()) DebugBreak();
 	__debugbreak();
 #elif defined(__APPLE__)
@@ -541,6 +544,8 @@ expr_expose_differentials(ExprHandle handle) {
 			ExprHandle B = arg1_node->arg0;
 			ExprHandle C = arg1_node->arg1;
 			if (arg1_node->kind == KIND_MUL) {
+				// NOTE: should I check if both branches have a differential and
+				// in case panic?
 				bool diff_on_the_lhs = expr_has_differential(B);
 				if (diff_on_the_lhs) {
 					// A:B C => B' A:C
@@ -660,36 +665,157 @@ expr_factor(ExprHandle handle) {
 	return res;
 }
 
+typedef struct ParserState {
+	const char *tokens;
+	size_t lentgh;
+	size_t current;
+} ParserState;
+
+static bool
+ParserState_is_at_end(const ParserState *state) {
+	return state->lentgh == state->current;
+}
+
+static char ParserState_match(ParserState *state, char type) {
+	// NOTE: in we always pass 0 terminated strings this check is unnecessary
+	// and we can just unconditionally return peek since '\0' should never be a
+	// type to match.
+	if (ParserState_is_at_end(state)) return '\0';
+	char peek = state->tokens[state->current];
+	if (peek == type) {
+		state->current++;
+		return peek;
+	}
+	return '\0';
+}
+
+/* The grammar to parse:
+ *     term    -> factor ("+" factor)*;
+ *     factor  -> unary (" " unary)*;
+ *     unary   -> primary "'"*;
+ *     primary -> VAR | "(" term ")";
+ */
+static ExprHandle Grammar_term    (ParserState *);
+static ExprHandle Grammar_inner   (ParserState *);
+static ExprHandle Grammar_factor  (ParserState *);
+static ExprHandle Grammar_unary   (ParserState *);
+static ExprHandle Grammar_primary (ParserState *);
+
+static ExprHandle
+Grammar_term(ParserState *state) {
+	ExprHandle expr = Grammar_inner(state);
+	while (ParserState_match(state, '+')) {
+		ExprHandle right = Grammar_inner(state);
+		expr = expr_make_operator(KIND_ADD, expr, right);
+	}
+	return expr;
+}
+
+static ExprHandle
+Grammar_inner(ParserState *state) {
+	ExprHandle expr = Grammar_factor(state);
+	while (ParserState_match(state, ':')) {
+		ExprHandle right = Grammar_factor(state);
+		expr = expr_make_operator(KIND_INNER, expr, right);
+	}
+	return expr;
+}
+
+static ExprHandle
+Grammar_factor(ParserState *state) {
+	ExprHandle expr = Grammar_unary(state);
+	while (ParserState_match(state, ' ')) {
+		ExprHandle right = Grammar_unary(state);
+		expr = expr_make_operator(KIND_MUL, expr, right);
+	}
+	return expr;
+}
+
+static ExprHandle
+Grammar_unary(ParserState *state) {
+	ExprHandle expr = Grammar_primary(state);
+	while (ParserState_match(state, '\'')) {
+		expr = expr_make_operator(KIND_TRANS, expr);
+	}
+	return expr;
+}
+
+static ExprHandle
+Grammar_primary(ParserState *state) {
+	for (int i = 0; i < 'Z' - 'A'; i++) {
+		char letter = 'A'+i;
+		if (ParserState_match(state, letter)) {
+			return expr_make_operand(letter == 'X' ? KIND_VAR : KIND_CONST, letter);
+		}
+	}
+	if (ParserState_match(state, '(')) {
+		ExprHandle expr = Grammar_term(state);
+		if (!ParserState_match(state, ')')) {
+			panic(ERROR_BAD_DATA);
+		}
+		return expr;
+	}
+	panic(ERROR_BAD_DATA);
+}
+
+static ExprHandle
+expr_parse(const char *expr) {
+	ParserState state = {.tokens = expr, .lentgh = strlen(expr)};
+	return Grammar_term(&state);
+}
+
+// Alla luce del fatto che quella che io chiamo forma normale distribuita non è
+// atro che un polinomio multivariato, il KIND_VAR è quello di tutte le
+// matrici che compaiono finora e quelle che hanno il nome 'X' saranno trattate
+// come quelle per le duali differenziamo. Le matrici costanti devono assumere
+// il significato diverso di essere una matrice identità moltiplicata per una
+// costante intera. expr_differentiate deve essere riscritta per prendere come
+// argomento la variabile rispetto al quale differenziare (a cui poi verranno
+// applicati i differenziali).
+
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
+// https://www.gingerbill.org/article/2019/02/16/memory-allocation-strategies-004/
 
 // TODO: print graphviz?
 // TODO: stampare stringa per verificare il risultato su https://matrixcalculus.org
 
-int main(int argc, char const *argv[]) {
+int
+main(int argc, char const *argv[]) {
+#ifdef REPL
+	printf(
+		"Press '^Z + Enter' on a line by itself to exit.\n"
+		"This is an example expression \"G:(E F (X+B) (C+X))'\" from which you\n"
+		"can infer the syntax for the expressions.\n"
+	);
+	ExprHandle res = HANDLE_NULL;
+	char str_buf[256] = {0};
+	while (printf("vJp> "), gets_s(str_buf, sizeof str_buf) == str_buf) {
+		res = expr_parse(str_buf);            expr_print(res); expr_stat(res);
+		// TODO: check that the expression is parsed entirely with
+		// ParserState_is_at_end
+		printf("Step 1. Differential application;\n");
+		res = expr_differentiate(res);        expr_print(res); expr_stat(res);
+		printf("Step 2. Distribution;\n");
+		res = expr_distr(res);                expr_print(res); expr_stat(res);
+		printf("Step 3. Bring out differentials;\n");
+		res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
+		printf("Step 4. Factorization.\n");
+		res = expr_distr(res);                expr_print(res); expr_stat(res);
+		res = expr_factor(res);               expr_print(res); expr_stat(res);
+		memset(node_pool, 0, sizeof node_pool);
+		node_pool_watermark = 1;
+	}
+	if (ferror(stdin)) {
+		return 1;
+	}
+	return 0;
+#else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
-	ExprHandle lhs = expr_make_operator(KIND_ADD,
-		expr_make_operand(KIND_VAR),
-		expr_make_operand(KIND_CONST, 'B')
-	);
-	ExprHandle rhs = expr_make_operator(KIND_ADD,
-		expr_make_operand(KIND_CONST, 'C'),
-		expr_make_operand(KIND_VAR)
-	);
-	ExprHandle res = expr_make_operator(KIND_MUL,
-		expr_make_operator(KIND_MUL,
-			expr_make_operand(KIND_CONST, 'E'),
-			expr_make_operand(KIND_CONST, 'F')
-		),
-		expr_make_operator(KIND_MUL, lhs, rhs)
-	);
-	res = expr_make_operator(KIND_INNER,
-		expr_make_operand(KIND_CONST, 'G'),
-		expr_make_operator(KIND_TRANS, res)
-	); expr_print(res); expr_stat(res);
+	ExprHandle res = HANDLE_NULL;
 	// tr(G'*(E*F*(X+B)*(C+X))')
-	// G:(E F (X+B) (C+X))'
+	res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
@@ -697,4 +823,5 @@ int main(int argc, char const *argv[]) {
 	res = expr_factor(res); expr_print(res); expr_stat(res);
 
 	return 0;
+#endif
 }
