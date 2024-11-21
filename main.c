@@ -31,7 +31,9 @@ panic(enum Error err) {
 	}
 	fflush(stdout);
 // We assume that each platform compiles with it compiler for simplicity
-#if defined(_WIN64)
+#if defined(REPL)
+	;
+#elif defined(_WIN64)
 	// if (IsDebuggerPresent()) DebugBreak();
 	__debugbreak();
 #elif defined(__APPLE__)
