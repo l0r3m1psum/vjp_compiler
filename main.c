@@ -773,11 +773,42 @@ expr_parse(const char *expr) {
 
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
+// https://www.gingerbill.org/article/2019/02/16/memory-allocation-strategies-004/
 
 // TODO: print graphviz?
 // TODO: stampare stringa per verificare il risultato su https://matrixcalculus.org
 
-int main(int argc, char const *argv[]) {
+int
+main(int argc, char const *argv[]) {
+#ifdef REPL
+	printf(
+		"Press '^Z + Enter' on a line by itself to exit.\n"
+		"This is an example expression \"G:(E F (X+B) (C+X))'\" from which you\n"
+		"can infer the syntax for the expressions.\n"
+	);
+	ExprHandle res = HANDLE_NULL;
+	char str_buf[256] = {0};
+	while (printf("vJp> "), gets_s(str_buf, sizeof str_buf) == str_buf) {
+		res = expr_parse(str_buf);            expr_print(res); expr_stat(res);
+		// TODO: check that the expression is parsed entirely with
+		// ParserState_is_at_end
+		printf("Step 1. Differential application;\n");
+		res = expr_differentiate(res);        expr_print(res); expr_stat(res);
+		printf("Step 2. Distribution;\n");
+		res = expr_distr(res);                expr_print(res); expr_stat(res);
+		printf("Step 3. Bring out differentials;\n");
+		res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
+		printf("Step 4. Factorization.\n");
+		res = expr_distr(res);                expr_print(res); expr_stat(res);
+		res = expr_factor(res);               expr_print(res); expr_stat(res);
+		memset(node_pool, 0);
+		node_pool_watermark = 1;
+	}
+	if (ferror(stdin)) {
+		return 1;
+	}
+	return 0;
+#else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	ExprHandle res = HANDLE_NULL;
@@ -790,4 +821,5 @@ int main(int argc, char const *argv[]) {
 	res = expr_factor(res); expr_print(res); expr_stat(res);
 
 	return 0;
+#endif
 }
