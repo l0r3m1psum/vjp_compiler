@@ -803,7 +803,7 @@ main(int argc, char const *argv[]) {
 		printf("Step 4. Factorization.\n");
 		res = expr_distr(res);                expr_print(res); expr_stat(res);
 		res = expr_factor(res);               expr_print(res); expr_stat(res);
-		memset(node_pool, 0);
+		memset(node_pool, 0, sizeof node_pool);
 		node_pool_watermark = 1;
 	}
 	if (ferror(stdin)) {
