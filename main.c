@@ -783,6 +783,11 @@ expr_parse(const char *expr) {
 int
 main(int argc, char const *argv[]) {
 #ifdef REPL
+	// TODO: print the ^D description on POSIX systems.
+	// TODO: test that memory does not leak with a long for loop.
+	// TODO: make a function expr_write che scrive un'espressione come stringa,
+	// questo mi permetterà di serializzare un espressione e rendere l'utilizzo
+	// di arene più fattibili.
 	printf(
 		"Press '^Z + Enter' on a line by itself to exit.\n"
 		"This is an example expression \"G:(E F (X+B) (C+X))'\" from which you\n"
@@ -821,6 +826,9 @@ main(int argc, char const *argv[]) {
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_factor(res); expr_print(res); expr_stat(res);
+
+	// FIXME: "G:(X B+C (X D))" outputs (G+C' G) B':dX instead of (G B'+C' G D'):dX
+	// the factoring algorithm does something wrong!
 
 	return 0;
 #endif
