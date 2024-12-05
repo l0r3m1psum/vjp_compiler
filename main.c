@@ -185,6 +185,8 @@ expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
 		return true;
 	} else if (arg0_node->kind != arg1_node->kind) {
 		return false;
+	} else if (arg0_node->kind == KIND_VAR || arg0_node->kind == KIND_CONST) {
+		return expr_char(arg0) == expr_char(arg1);
 	} else {
 		return expr_structural_equal(arg0_node->arg0, arg1_node->arg0)
 			&& expr_structural_equal(arg0_node->arg1, arg1_node->arg1);
@@ -820,7 +822,8 @@ main(int argc, char const *argv[]) {
 
 	ExprHandle res = HANDLE_NULL;
 	// tr(G'*(E*F*(X+B)*(C+X))')
-	res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
+	// res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
+	res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
 	res = expr_differentiate(res); expr_print(res); expr_stat(res);
 	res = expr_distr(res); expr_print(res); expr_stat(res);
 	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
@@ -829,6 +832,25 @@ main(int argc, char const *argv[]) {
 
 	// FIXME: "G:(X B+C (X D))" outputs (G+C' G) B':dX instead of (G B'+C' G D'):dX
 	// the factoring algorithm does something wrong!
+
+#if 0
+	If we want for structural equality to work for the following case
+	expr_structural_equal(
+		expr_parse("A+(B+C)"),
+		expr_parse("(A+B)+C")
+	);
+	We have to mantain an invariance (to parentesization of associative
+	operations) on the organization of the tree. A convenient one for factoring
+	is the following, if the expression is "A B C" we transform it in the
+	following tree
+	  *
+	 / \
+	A  *
+	  / \
+	 B   C
+	So when we are factoring left multiplications we only have to look one
+	branch to the left and reach a constant node.
+#endif
 
 	return 0;
 #endif
