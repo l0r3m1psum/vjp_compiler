@@ -902,23 +902,6 @@ main(int argc, char const *argv[]) {
 		}
 	}
 	{
-		/* If we want for structural equality to work for the following case
-		 * expr_structural_equal(
-		 *     expr_parse("A+(B+C)"),
-		 *     expr_parse("(A+B)+C")
-		 * );
-		 * We have to mantain an invariance (to parentesization of associative
-		 * operations) on the organization of the tree. A convenient one for factoring
-		 * is the following, if the expression is "A B C" we transform it in the
-		 * following tree
-		 *   *
-		 *  / \
-		 * A  *
-		 *   / \
-		 *  B   C
-		 * So when we are factoring left multiplications we only have to look one
-		 * branch to the left and reach a constant node.
-		 */
 		const char *lhs_str = "A+(B+C)";
 		const char *rhs_str = "(A+B)+C";
 		ExprHandle lhs = expr_parse(lhs_str);
