@@ -90,7 +90,7 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // NOTE: there are two functions that need to know where the differential are
 // down the tree (i.e. expr_differentiate_internal and
 // expr_expose_differentials) the req_grad bit could be added by
-// expr_distr_internal when it buidls the tree from the bottom so that it is a
+// expr_distr_internal when it builds the tree from the bottom so that it is a
 // property calculated once and for all (note that the various functions still
 // need to propagte this information arround when contructing new nodes.)
 typedef struct ExprNode {
@@ -128,11 +128,16 @@ expr_char(ExprHandle handle) {
 	panic(ERROR_BAD_ARG);
 }
 
-static void
-expr_print_internal(ExprHandle handle) {
+static bool
+expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
+#define TRY_WRITE(c) do { \
+			if (*len == 0) return false; \
+			else **buf = (c), (*buf)++, (*len)--; \
+		} while (0)
+
 	const ExprNode *node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
-		return;
+		return true;
 	}
 
 	int node_precedence = kind_precedence(node->kind);
@@ -142,26 +147,56 @@ expr_print_internal(ExprHandle handle) {
 	bool arg1_print_parenthesis = arg1_precedence > node_precedence;
 
 	if (arg0_print_parenthesis) {
-		printf("(");
+		TRY_WRITE('(');
 	}
-	expr_print_internal(node->arg0);
+	if (!expr_write_internal(node->arg0, buf, len)) {
+		return false;
+	}
 	if (arg0_print_parenthesis) {
-		printf(")");
+		TRY_WRITE(')');
 	}
-	printf("%c", expr_char(handle));
+
+	TRY_WRITE(expr_char(handle));
+
 	if (arg1_print_parenthesis) {
-		printf("(");
+		TRY_WRITE('(');
 	}
-	expr_print_internal(node->arg1);
+	if (!expr_write_internal(node->arg1, buf, len)) {
+		return false;
+	}
 	if (arg1_print_parenthesis) {
-		printf(")");
+		TRY_WRITE(')');
 	}
+	return true;
+#undef TRY_WRITE
+}
+
+static bool
+expr_write(ExprHandle handle, char *buf, size_t len) {
+	char *orig_buf = buf;
+	size_t orig_len = len;
+	if (!expr_write_internal(handle, &buf, &len) || len == 0) {
+		return false;
+	}
+	*buf = 0;
+	size_t write_len = buf - orig_buf;
+	assert(strlen(orig_buf) == write_len);
+	assert(write_len < orig_len); // For the null terminator.
+	// TODO: return struct OptionalSize { bool nothing; size_t just; }
+	return true;
 }
 
 static void
 expr_print(ExprHandle handle) {
-	expr_print_internal(handle);
-	printf("\n");
+	// NOTE: Is there any way to divide the tree in chunks to make the the print
+	// just a loop of expr_write over the chunk of this tree? I guess that this
+	// can be done by saving some sort of context of where the recursion stopped
+	// and then resume the recursion from an empty buffer (or just suck it up
+	// and write again a print function...)
+	static char buf[1024] = {0};
+	bool ok = expr_write(handle, buf, sizeof buf);
+	if (!ok) buf[1023] = 0;
+	printf("%s%s\n", buf, ok ? "" : "...");
 }
 
 static uint16_t node_pool_watermark = 1;
@@ -177,6 +212,10 @@ expr_is_valid(ExprHandle handle) {
 	return !expr_is_equal(handle, HANDLE_NULL);
 }
 
+// TODO: use the output of expr_write on arg0 and arg1 and compare it with
+// int strcmp(const char *, const char *). This avoids problems related to
+// associativity.
+// TODO: find a way to order commutative operators.
 static bool
 expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
 	const ExprNode *arg0_node = expr_get_node(arg0);
@@ -766,6 +805,34 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
+// TODO: add global logging flag...
+
+static ExprHandle
+expr_derivative(ExprHandle handle, bool verbose) {
+	ExprHandle res = handle;
+#define V if (verbose)
+#define S V { expr_print(res); expr_stat(res); }
+	V printf("Step 1. Differential application;\n");
+	res = expr_differentiate(res); S
+	V printf("Step 2. Distribution;\n");
+	res = expr_distr(res); S
+	V printf("Step 3. Bring out differentials;\n");
+	res = expr_expose_differentials(res); S
+	V printf("Step 4. Factorization.\n");
+	res = expr_distr(res); S
+	res = expr_factor(res); S
+	const ExprNode *node = expr_get_node(res);
+	// A(X):dX
+	assert(
+		node->kind == KIND_INNER
+			? expr_get_node(node->arg1)->kind == KIND_DIFF
+			: node->kind == KIND_NULL
+	);
+	return node->arg0;
+#undef V
+#undef S
+}
+
 // Alla luce del fatto che quella che io chiamo forma normale distribuita non è
 // atro che un polinomio multivariato, il KIND_VAR è quello di tutte le
 // matrici che compaiono finora e quelle che hanno il nome 'X' saranno trattate
@@ -801,15 +868,7 @@ main(int argc, char const *argv[]) {
 		res = expr_parse(str_buf);            expr_print(res); expr_stat(res);
 		// TODO: check that the expression is parsed entirely with
 		// ParserState_is_at_end
-		printf("Step 1. Differential application;\n");
-		res = expr_differentiate(res);        expr_print(res); expr_stat(res);
-		printf("Step 2. Distribution;\n");
-		res = expr_distr(res);                expr_print(res); expr_stat(res);
-		printf("Step 3. Bring out differentials;\n");
-		res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
-		printf("Step 4. Factorization.\n");
-		res = expr_distr(res);                expr_print(res); expr_stat(res);
-		res = expr_factor(res);               expr_print(res); expr_stat(res);
+		res = expr_derivative(res, true);
 		memset(node_pool, 0, sizeof node_pool);
 		node_pool_watermark = 1;
 	}
@@ -817,41 +876,68 @@ main(int argc, char const *argv[]) {
 		return 1;
 	}
 	return 0;
+#elif defined(TEST)
+	{
+		const char *lhs_str = "G:(E F (X+B) (C+X))'";
+		const char *rhs_str = "((C+X) G E F+G E F (X+B))'";
+		ExprHandle lhs = expr_derivative(expr_parse(lhs_str), false);
+		ExprHandle rhs = expr_parse(rhs_str);
+		bool ok = expr_structural_equal(lhs, rhs);
+		if (!ok) {
+			printf("Derivative of %s is not %s but is\n", lhs_str, rhs_str);
+			expr_print(lhs);
+			return 1;
+		}
+	}
+	{
+		const char *lhs_str = "G:(X B+C (X D))";
+		const char *rhs_str = "(G B'+C' G D')";
+		ExprHandle lhs = expr_derivative(expr_parse(lhs_str), false);
+		ExprHandle rhs = expr_parse(rhs_str);
+		bool ok = expr_structural_equal(expr_derivative(lhs, false), rhs);
+		if (!ok) {
+			printf("Derivative of %s is not %s but is\n", lhs_str, rhs_str);
+			expr_print(lhs);
+			return 1;
+		}
+	}
+	{
+		/* If we want for structural equality to work for the following case
+		 * expr_structural_equal(
+		 *     expr_parse("A+(B+C)"),
+		 *     expr_parse("(A+B)+C")
+		 * );
+		 * We have to mantain an invariance (to parentesization of associative
+		 * operations) on the organization of the tree. A convenient one for factoring
+		 * is the following, if the expression is "A B C" we transform it in the
+		 * following tree
+		 *   *
+		 *  / \
+		 * A  *
+		 *   / \
+		 *  B   C
+		 * So when we are factoring left multiplications we only have to look one
+		 * branch to the left and reach a constant node.
+		 */
+		const char *lhs_str = "A+(B+C)";
+		const char *rhs_str = "(A+B)+C";
+		ExprHandle lhs = expr_parse(lhs_str);
+		ExprHandle rhs = expr_parse(rhs_str);
+		bool ok = expr_structural_equal(lhs, rhs);
+		if (!ok) {
+			printf("%s is not structurally equal to %s\n", lhs_str, rhs_str);
+			return 1;
+		}
+	}
+	return 0;
 #else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	ExprHandle res = HANDLE_NULL;
 	// tr(G'*(E*F*(X+B)*(C+X))')
-	// res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
-	res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
-	res = expr_differentiate(res); expr_print(res); expr_stat(res);
-	res = expr_distr(res); expr_print(res); expr_stat(res);
-	res = expr_expose_differentials(res); expr_print(res); expr_stat(res);
-	res = expr_distr(res); expr_print(res); expr_stat(res);
-	res = expr_factor(res); expr_print(res); expr_stat(res);
-
-	// FIXME: "G:(X B+C (X D))" outputs (G+C' G) B':dX instead of (G B'+C' G D'):dX
-	// the factoring algorithm does something wrong!
-
-#if 0
-	If we want for structural equality to work for the following case
-	expr_structural_equal(
-		expr_parse("A+(B+C)"),
-		expr_parse("(A+B)+C")
-	);
-	We have to mantain an invariance (to parentesization of associative
-	operations) on the organization of the tree. A convenient one for factoring
-	is the following, if the expression is "A B C" we transform it in the
-	following tree
-	  *
-	 / \
-	A  *
-	  / \
-	 B   C
-	So when we are factoring left multiplications we only have to look one
-	branch to the left and reach a constant node.
-#endif
-
+	res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
+	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
+	res = expr_derivative(res, true);
 	return 0;
 #endif
 }
