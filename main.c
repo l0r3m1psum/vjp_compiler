@@ -132,7 +132,7 @@ static bool
 expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
 #define TRY_WRITE(c) do { \
 			if (*len == 0) return false; \
-			else **buf = (c), (*buf)++, (*len)--; \
+			else *(*buf)++ = (c), (*len)--; \
 		} while (0)
 
 	const ExprNode *node = expr_get_node(handle);
