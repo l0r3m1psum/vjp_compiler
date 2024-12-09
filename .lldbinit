@@ -1,0 +1,3 @@
+command script import -c types.py
+type summary add -e -F types.ExprNodeSummary ExprNode
+type synthetic add -l types.ExprNodeSyntheticChildrenProvider ExprNode
