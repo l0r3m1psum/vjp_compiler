@@ -9,6 +9,7 @@ noreturn void exit(int);
 #include <stdio.h>
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
+void *memset(void *, int, size_t);
 
 #define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
 #define COUNTOF(a) (sizeof (a) / sizeof *(a))
@@ -110,6 +111,8 @@ static uint16_t node_pool_watermark = 1;
 // "(A)+(B)".
 static char str_buf_arg0[COUNTOF(node_pool)*5 + 1];
 static char str_buf_arg1[COUNTOF(node_pool)*5 + 1];
+
+static bool trace_execution;
 
 // NOTE: the struture is so small that I could also return it by value...
 static const ExprNode *
@@ -481,7 +484,7 @@ expr_distr(ExprHandle handle) {
 	while (changed) {
 		changed = false;
 		res = expr_distr_internal(old_res, &changed);
-		printf("\t"); expr_print(res);
+		if (trace_execution) printf("\t"), expr_print(res);
 		// TODO: free old_res
 		old_res = res;
 	}
@@ -693,7 +696,7 @@ expr_factor(ExprHandle handle) {
 	while (changed) {
 		changed = false;
 		res = expr_factor_internal(old_res, &changed);
-		printf("\t"); expr_print(res);
+		if (trace_execution) printf("\t"), expr_print(res);
 		// TODO: free old_res
 		old_res = res;
 	}
@@ -799,12 +802,10 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
-// TODO: add global logging flag...
-
 static ExprHandle
-expr_derivative(ExprHandle handle, bool verbose) {
+expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
-#define V if (verbose)
+#define V if (trace_execution)
 #define S V { expr_print(res); expr_stat(res); }
 	V printf("Step 1. Differential application;\n");
 	res = expr_differentiate(res); S
@@ -848,9 +849,6 @@ main(int argc, char const *argv[]) {
 #ifdef REPL
 	// TODO: print the ^D description on POSIX systems.
 	// TODO: test that memory does not leak with a long for loop.
-	// TODO: make a function expr_write che scrive un'espressione come stringa,
-	// questo mi permetterà di serializzare un espressione e rendere l'utilizzo
-	// di arene più fattibili.
 	printf(
 		"Press '^Z + Enter' on a line by itself to exit.\n"
 		"This is an example expression \"G:(E F (X+B) (C+X))'\" from which you\n"
@@ -858,11 +856,12 @@ main(int argc, char const *argv[]) {
 	);
 	ExprHandle res = HANDLE_NULL;
 	char str_buf[256] = {0};
-	while (printf("vJp> "), gets_s(str_buf, sizeof str_buf) == str_buf) {
+	trace_execution = true;
+	while (printf("vJp> "), fgets(str_buf, sizeof str_buf, stdin) == str_buf) {
 		res = expr_parse(str_buf);            expr_print(res); expr_stat(res);
 		// TODO: check that the expression is parsed entirely with
 		// ParserState_is_at_end
-		res = expr_derivative(res, true);
+		res = expr_derivative(res);
 		memset(node_pool, 0, sizeof node_pool);
 		node_pool_watermark = 1;
 	}
@@ -871,10 +870,11 @@ main(int argc, char const *argv[]) {
 	}
 	return 0;
 #elif defined(TEST)
+	trace_execution = false;
 	{
 		const char *lhs_str = "G:(E F (X+B) (C+X))'";
 		const char *rhs_str = "((C+X) G E F+G E F (X+B))'";
-		ExprHandle lhs = expr_derivative(expr_parse(lhs_str), false);
+		ExprHandle lhs = expr_derivative(expr_parse(lhs_str));
 		ExprHandle rhs = expr_parse(rhs_str);
 		bool ok = expr_structural_equal(lhs, rhs);
 		if (!ok) {
@@ -886,7 +886,7 @@ main(int argc, char const *argv[]) {
 	{
 		const char *lhs_str = "G:(X B+C (X D))";
 		const char *rhs_str = "(G B'+C' G D')";
-		ExprHandle lhs = expr_derivative(expr_parse(lhs_str), false);
+		ExprHandle lhs = expr_derivative(expr_parse(lhs_str));
 		ExprHandle rhs = expr_parse(rhs_str);
 		bool ok = expr_structural_equal(lhs, rhs);
 		if (!ok) {
@@ -911,11 +911,12 @@ main(int argc, char const *argv[]) {
 #else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
+	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
 	// tr(G'*(E*F*(X+B)*(C+X))')
 	res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
 	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
-	res = expr_derivative(res, true);
+	res = expr_derivative(res);
 	return 0;
 #endif
 }
