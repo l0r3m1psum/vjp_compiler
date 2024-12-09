@@ -50,9 +50,12 @@ panic(enum Error err) {
 	exit(1);
 }
 
+// TODO: Add support for constants of the matrix multiplication ring. Note that
+// this may add some complication to the algorithm, especially for factoring
+// integer. Given the fact that factoring integer is rarely going to be used we
+// are going to implement this feature later.
 typedef enum Kind {
 	KIND_NULL,
-	KIND_CONST,
 	KIND_VAR,
 	KIND_ADD,
 	KIND_MUL,
@@ -60,7 +63,7 @@ typedef enum Kind {
 	KIND_DIFF,
 	KIND_INNER,
 } Kind;
-#define KIND_COUNT 8
+#define KIND_COUNT 7
 #define CHECK_KIND(n) _Static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
@@ -68,10 +71,9 @@ typedef enum Kind {
 // third, ...)
 static int
 kind_precedence(Kind kind) {
-	CHECK_KIND(8);
+	CHECK_KIND(7);
 	switch (kind) {
 	case KIND_NULL:  return 0;
-	case KIND_CONST: return 0;
 	case KIND_VAR:   return 0;
 	case KIND_ADD:   return 5;
 	case KIND_MUL:   return 3;
@@ -98,7 +100,7 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // need to propagte this information arround when contructing new nodes.)
 typedef struct ExprNode {
 	uint8_t kind;
-	char name;       // To distinguish constants.
+	char name;
 	// char padding[1];
 	ExprHandle arg0;
 	ExprHandle arg1;
@@ -123,13 +125,11 @@ expr_get_node(ExprHandle handle) {
 static char
 expr_char(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
-	CHECK_KIND(8);
+	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:  return '\0';
-	case KIND_CONST:
-		if (node->name == 'X') panic(ERROR_BAD_DATA);
-		return node->name; // NOTE: We should allow only upper case letters
-	case KIND_VAR:   return 'X';
+	// NOTE: We should allow only upper case letters
+	case KIND_VAR:   return node->name;
 	case KIND_ADD:   return '+';
 	case KIND_MUL:   return ' ';
 	case KIND_TRANS: return '\'';
@@ -252,22 +252,13 @@ expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 }
 
 static ExprHandle
-expr_make_operand(Kind kind, ...) {
-	if (kind != KIND_CONST && kind != KIND_VAR) {
-		return HANDLE_NULL;
-	}
-	char name = 'X';
-	if (kind == KIND_CONST) {
-		va_list args;
-		va_start(args, kind);
-		name = va_arg(args, int);
-		va_end(args);
-	}
-	return expr_make_node(kind, name, HANDLE_NULL, HANDLE_NULL);
+expr_make_operand(char name) {
+	return expr_make_node(KIND_VAR, name, HANDLE_NULL, HANDLE_NULL);
 }
 
 static ExprHandle
 expr_make_operator(Kind kind, ExprHandle arg0, ...) {
+	// FIXME: this is a stupid way to do it, we should panic instead...
 	if (kind != KIND_ADD
 		&& kind != KIND_MUL
 		&& kind != KIND_TRANS
@@ -301,22 +292,24 @@ expr_copy(ExprHandle handle) {
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
 }
 
+// TODO: This function should take as an argument the variable to which we are
+// differentiating w.r.t. . Now 'X' is always that variable.
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	const ExprNode *node = expr_get_node(handle);
 
-	CHECK_KIND(8);
+	CHECK_KIND(7);
 	if (node->kind == KIND_NULL) {
 		*req_grad = false;
 		return HANDLE_NULL;
 	}
-	if (node->kind == KIND_CONST) {
+	if (node->kind == KIND_VAR) {
+		if (node->name == 'X') {
+			*req_grad = true;
+			return expr_make_operator(KIND_DIFF, expr_copy(handle));
+		}
 		*req_grad = false;
 		return HANDLE_NULL;
-	}
-	if (node->kind == KIND_VAR) {
-		*req_grad = true;
-		return expr_make_operator(KIND_DIFF, expr_copy(handle));
 	}
 
 	bool arg0_req_grad = false;
@@ -369,7 +362,8 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		}
 	}
 	if (node->kind == KIND_DIFF) {
-		// Differential nodes should only be applied to variables node.
+		// Differential nodes should only be applied to the variable we are
+		// differentiating w.r.t and only be applied by this function.
 		panic(ERROR_BAD_DATA);
 	}
 
@@ -468,7 +462,7 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		}
 	}
 
-	if (node->kind == KIND_CONST || node->kind == KIND_VAR) {
+	if (node->kind == KIND_VAR) {
 		return expr_copy(handle);
 	}
 	return expr_make_node(node->kind, node->name,
@@ -494,11 +488,10 @@ expr_distr(ExprHandle handle) {
 static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
 	const ExprNode *node = expr_get_node(handle);
-	CHECK_KIND(8);
+	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:
 		break;
-	case KIND_CONST:
 	case KIND_VAR:
 		(*operand_count)++;
 		break;
@@ -518,7 +511,7 @@ expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operan
 		(*operator_count)++;
 		break;
 	}
-	// TODO: duplicated count?
+	// TODO: duplicated count? This requires a hash table.
 	return;
 }
 
@@ -679,7 +672,7 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 		}
 	}
 
-	if (node->kind == KIND_CONST || node->kind == KIND_VAR) {
+	if (node->kind == KIND_VAR) {
 		return expr_copy(handle);
 	}
 
@@ -783,7 +776,7 @@ Grammar_primary(ParserState *state) {
 	for (int i = 0; i < 'Z' - 'A'; i++) {
 		char letter = 'A'+i;
 		if (ParserState_match(state, letter)) {
-			return expr_make_operand(letter == 'X' ? KIND_VAR : KIND_CONST, letter);
+			return expr_make_operand(letter);
 		}
 	}
 	if (ParserState_match(state, '(')) {
@@ -827,15 +820,6 @@ expr_derivative(ExprHandle handle) {
 #undef V
 #undef S
 }
-
-// Alla luce del fatto che quella che io chiamo forma normale distribuita non è
-// atro che un polinomio multivariato, il KIND_VAR è quello di tutte le
-// matrici che compaiono finora e quelle che hanno il nome 'X' saranno trattate
-// come quelle per le duali differenziamo. Le matrici costanti devono assumere
-// il significato diverso di essere una matrice identità moltiplicata per una
-// costante intera. expr_differentiate deve essere riscritta per prendere come
-// argomento la variabile rispetto al quale differenziare (a cui poi verranno
-// applicati i differenziali).
 
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
