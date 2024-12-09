@@ -8,8 +8,10 @@
 noreturn void exit(int);
 #include <stdio.h>
 size_t strlen(const char *);
+int strcmp(const char *, const char *);
 
 #define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
+#define COUNTOF(a) (sizeof (a) / sizeof *(a))
 
 enum Error {
 	ERROR_BAD_ALLOC,
@@ -102,6 +104,12 @@ typedef struct ExprNode {
 } ExprNode;
 
 static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
+static uint16_t node_pool_watermark = 1;
+// Over allocated buffers for writing expressions. We assume the worst case
+// possible that every node requires its arguments to be parenthesized e.g.
+// "(A)+(B)".
+static char str_buf_arg0[COUNTOF(node_pool)*5 + 1];
+static char str_buf_arg1[COUNTOF(node_pool)*5 + 1];
 
 // NOTE: the struture is so small that I could also return it by value...
 static const ExprNode *
@@ -193,13 +201,10 @@ expr_print(ExprHandle handle) {
 	// can be done by saving some sort of context of where the recursion stopped
 	// and then resume the recursion from an empty buffer (or just suck it up
 	// and write again a print function...)
-	static char buf[1024] = {0};
-	bool ok = expr_write(handle, buf, sizeof buf);
-	if (!ok) buf[1023] = 0;
-	printf("%s%s\n", buf, ok ? "" : "...");
+	bool ok = expr_write(handle, str_buf_arg0, sizeof str_buf_arg0);
+	assert(ok);
+	printf("%s\n", str_buf_arg0);
 }
-
-static uint16_t node_pool_watermark = 1;
 
 // Basically pointer equality
 static bool
@@ -212,24 +217,13 @@ expr_is_valid(ExprHandle handle) {
 	return !expr_is_equal(handle, HANDLE_NULL);
 }
 
-// TODO: use the output of expr_write on arg0 and arg1 and compare it with
-// int strcmp(const char *, const char *). This avoids problems related to
-// associativity.
 // TODO: find a way to order commutative operators.
 static bool
 expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
-	const ExprNode *arg0_node = expr_get_node(arg0);
-	const ExprNode *arg1_node = expr_get_node(arg1);
-	if (!expr_is_valid(arg0) && !expr_is_valid(arg1)) {
-		return true;
-	} else if (arg0_node->kind != arg1_node->kind) {
-		return false;
-	} else if (arg0_node->kind == KIND_VAR || arg0_node->kind == KIND_CONST) {
-		return expr_char(arg0) == expr_char(arg1);
-	} else {
-		return expr_structural_equal(arg0_node->arg0, arg1_node->arg0)
-			&& expr_structural_equal(arg0_node->arg1, arg1_node->arg1);
-	}
+	bool ok = false;
+	ok = expr_write(arg0, str_buf_arg0, sizeof str_buf_arg0); assert(ok);
+	ok = expr_write(arg1, str_buf_arg1, sizeof str_buf_arg1); assert(ok);
+	return strcmp(str_buf_arg0, str_buf_arg1) == 0;
 }
 
 static ExprHandle
@@ -894,7 +888,7 @@ main(int argc, char const *argv[]) {
 		const char *rhs_str = "(G B'+C' G D')";
 		ExprHandle lhs = expr_derivative(expr_parse(lhs_str), false);
 		ExprHandle rhs = expr_parse(rhs_str);
-		bool ok = expr_structural_equal(expr_derivative(lhs, false), rhs);
+		bool ok = expr_structural_equal(lhs, rhs);
 		if (!ok) {
 			printf("Derivative of %s is not %s but is\n", lhs_str, rhs_str);
 			expr_print(lhs);
@@ -912,6 +906,7 @@ main(int argc, char const *argv[]) {
 			return 1;
 		}
 	}
+	printf("OK!\n");
 	return 0;
 #else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
