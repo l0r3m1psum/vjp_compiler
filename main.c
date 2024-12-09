@@ -298,13 +298,15 @@ static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	const ExprNode *node = expr_get_node(handle);
 
+	char wrt = 'X';
+
 	CHECK_KIND(7);
 	if (node->kind == KIND_NULL) {
 		*req_grad = false;
 		return HANDLE_NULL;
 	}
 	if (node->kind == KIND_VAR) {
-		if (node->name == 'X') {
+		if (node->name == wrt) {
 			*req_grad = true;
 			return expr_make_operator(KIND_DIFF, expr_copy(handle));
 		}
@@ -388,6 +390,7 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 
 	// TODO: transpose interact with the inner product in the following ways
 	// (A:B)' => A:B and A':B' => A:B
+	// Can this break factoring later? I should think of a test case for this
 	if (node->kind == KIND_TRANS) {
 		if (arg0_node->kind == KIND_TRANS) {
 			// (A')' => A
@@ -773,8 +776,7 @@ Grammar_unary(ParserState *state) {
 
 static ExprHandle
 Grammar_primary(ParserState *state) {
-	for (int i = 0; i < 'Z' - 'A'; i++) {
-		char letter = 'A'+i;
+	for (char letter = 'A'; letter <= 'Z'; letter++) {
 		if (ParserState_match(state, letter)) {
 			return expr_make_operand(letter);
 		}
