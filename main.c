@@ -10,8 +10,16 @@ noreturn void exit(int);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
 void *memset(void *, int, size_t);
-
-#define SWAP(x, y, T) do { T tmp = x; x = y; y = tmp; } while (0)
+void *memswp(void *restrict lhs, void *restrict rhs, size_t count) {
+	unsigned char *restrict lhsp = lhs, *restrict rhsp = rhs;
+	unsigned char tmp = 0;
+	for (size_t i = 0; i < count; i++) {
+		tmp = lhsp[i];
+		lhsp[i] = rhsp[i];
+		rhsp[i] = tmp;
+	}
+	return lhs;
+}
 #define COUNTOF(a) (sizeof (a) / sizeof *(a))
 
 enum Error {
@@ -276,7 +284,7 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 		// This is done to make the print function work seamlessly with unary
 		// operators that have to appear on the left of their argument. Think of
 		// arg0 as the lhs and arg1 as the rhs of a binary operator.
-		SWAP(arg0, arg1, ExprHandle);
+		memswp(&arg0, &arg1, sizeof arg0);
 	}
 	return expr_make_node(kind, '\0', arg0, arg1);
 }
