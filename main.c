@@ -302,6 +302,8 @@ expr_copy(ExprHandle handle) {
 
 // TODO: This function should take as an argument the variable to which we are
 // differentiating w.r.t. . Now 'X' is always that variable.
+// TODO: this function should return a constant 0 if it does not find any
+// variable to differentiare w.r.t.
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	const ExprNode *node = expr_get_node(handle);
