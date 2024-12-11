@@ -811,6 +811,44 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
+static void
+expr_print_matrixcalculus_internal(ExprHandle handle) {
+	const ExprNode *node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return;
+	}
+
+	bool node_is_inner = node->kind == KIND_INNER;
+
+	int node_precedence = kind_precedence(node_is_inner ? KIND_MUL : node->kind);
+	int arg0_precedence = kind_precedence(expr_get_node(node->arg0)->kind);
+	int arg1_precedence = kind_precedence(expr_get_node(node->arg1)->kind);
+	int node_or_trans_precedence = node_is_inner ? kind_precedence(KIND_TRANS) : node_precedence;
+	bool arg0_print_parenthesis = arg0_precedence > node_or_trans_precedence;
+	bool arg1_print_parenthesis = arg1_precedence > node_precedence;
+
+	if (node_is_inner) printf("tr(");
+		if (arg0_print_parenthesis) printf("(");
+		expr_print_matrixcalculus_internal(node->arg0);
+		if (arg0_print_parenthesis) printf(")");
+	if (node_is_inner) printf("'");
+
+	if (node_is_inner || node->kind == KIND_MUL) printf("*");
+	else printf("%c", expr_char(handle));
+
+	if (node_is_inner) ;
+		if (arg1_print_parenthesis) printf("(");
+		expr_print_matrixcalculus_internal(node->arg1);
+		if (arg1_print_parenthesis) printf(")");
+	if (node_is_inner) printf(")");
+}
+
+static void
+expr_print_matrixcalculus(ExprHandle handle) {
+	expr_print_matrixcalculus_internal(handle);
+	printf("\n");
+}
+
 static ExprHandle
 expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
@@ -833,6 +871,9 @@ expr_derivative(ExprHandle handle) {
 	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
 
+	V printf("Equivalent expression to check result on https://www.matrixcalculus.org\n");
+	V expr_print_matrixcalculus(handle);
+
 	const ExprNode *node = expr_get_node(res);
 	// A(X):dX
 	assert(
@@ -849,7 +890,6 @@ expr_derivative(ExprHandle handle) {
 // https://www.gingerbill.org/article/2019/02/16/memory-allocation-strategies-004/
 
 // TODO: print graphviz?
-// TODO: stampare stringa per verificare il risultato su https://matrixcalculus.org
 
 static bool
 test_derivative(const char *expr, const char *res) {
