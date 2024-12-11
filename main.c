@@ -48,10 +48,10 @@ panic(enum Error err) {
 	// if (IsDebuggerPresent()) DebugBreak();
 	__debugbreak();
 #elif defined(__APPLE__)
-	// https://stackoverflow.com/questions/2200277/detecting-debugger-on-mac-os-x
+	// https://stackoverflow.com/questions/2200277/
 	__builtin_debugtrap();
 #elif defined(__linux__)
-	// https://stackoverflow.com/questions/3596781/how-to-detect-if-the-current-process-is-being-run-by-gdb
+	// https://stackoverflow.com/questions/3596781/
 	__builtin_trap();
 #else
 #endif
@@ -576,22 +576,26 @@ expr_expose_differentials(ExprHandle handle) {
 		);
 	}
 
-	// NOTE: the algorithm could support the differential being in the left or
-	// right argument of the inner product, but for simplicity we are going to
-	// assume that it can only be on the right. But the inner product is
-	// commutative so it would not be that hard to implement.
 	if (node->kind == KIND_INNER) {
-		ExprHandle A = expr_copy(node->arg0);
-		ExprHandle arg1 = node->arg1;
+		ExprHandle arg0 = node->arg0, arg1 = node->arg1;
+		bool diff_on_arg0 = expr_has_differential(arg0);
+		bool diff_on_arg1 = expr_has_differential(arg1);
+		if (diff_on_arg0 && diff_on_arg1 || !diff_on_arg0 && !diff_on_arg1)
+			panic(ERROR_BAD_DATA);
+		// By convention we want the differential to be on the rhs.
+		if (expr_has_differential(arg0)) {
+			memswp(&arg0, &arg1, sizeof arg0);
+		}
+		ExprHandle A = expr_copy(arg0);
 		const ExprNode *arg1_node = NULL;
 		while (arg1_node = expr_get_node(arg1), arg1_node->kind != KIND_DIFF) {
 			ExprHandle B = arg1_node->arg0;
 			ExprHandle C = arg1_node->arg1;
 			if (arg1_node->kind == KIND_MUL) {
-				// NOTE: should I check if both branches have a differential and
-				// in case panic?
-				bool diff_on_the_lhs = expr_has_differential(B);
-				if (diff_on_the_lhs) {
+				bool diff_on_B = expr_has_differential(B);
+				bool diff_on_C = expr_has_differential(C);
+				if (diff_on_B && diff_on_C) panic(ERROR_BAD_DATA);
+				if (diff_on_B) {
 					// A:B C => B' A:C
 					A = expr_make_operator(KIND_MUL,
 						A,
@@ -811,16 +815,24 @@ static ExprHandle
 expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
 #define V if (trace_execution)
-#define S V { expr_print(res); expr_stat(res); }
+
 	V printf("Step 1. Differential application;\n");
-	res = expr_differentiate(res); S
+	res = expr_differentiate(res);
+	V { expr_print(res); expr_stat(res); }
+
 	V printf("Step 2. Distribution;\n");
-	res = expr_distr(res); S
+	res = expr_distr(res);
+	V { expr_print(res); expr_stat(res); }
+
 	V printf("Step 3. Bring out differentials;\n");
-	res = expr_expose_differentials(res); S
+	res = expr_expose_differentials(res);
+	V { expr_print(res); expr_stat(res); }
+
 	V printf("Step 4. Factorization.\n");
-	res = expr_distr(res); S
-	res = expr_factor(res); S
+	res = expr_distr(res);
+	res = expr_factor(res);
+	V { expr_print(res); expr_stat(res); }
+
 	const ExprNode *node = expr_get_node(res);
 	// A(X):dX
 	assert(
@@ -830,7 +842,6 @@ expr_derivative(ExprHandle handle) {
 	);
 	return node->arg0;
 #undef V
-#undef S
 }
 
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
@@ -839,6 +850,18 @@ expr_derivative(ExprHandle handle) {
 
 // TODO: print graphviz?
 // TODO: stampare stringa per verificare il risultato su https://matrixcalculus.org
+
+static bool
+test_derivative(const char *expr, const char *res) {
+	ExprHandle lhs = expr_derivative(expr_parse(expr));
+	ExprHandle rhs = expr_parse(res);
+	bool ok = expr_structural_equal(lhs, rhs);
+	if (!ok) {
+		printf("Derivative of %s is not %s but is\n", expr, res);
+		expr_print(lhs);
+	}
+	return ok;
+}
 
 int
 main(int argc, char const *argv[]) {
@@ -867,30 +890,12 @@ main(int argc, char const *argv[]) {
 	return 0;
 #elif defined(TEST)
 	trace_execution = false;
-	{
-		const char *lhs_str = "G:(E F (X+B) (C+X))'";
-		const char *rhs_str = "((C+X) G E F+G E F (X+B))'";
-		ExprHandle lhs = expr_derivative(expr_parse(lhs_str));
-		ExprHandle rhs = expr_parse(rhs_str);
-		bool ok = expr_structural_equal(lhs, rhs);
-		if (!ok) {
-			printf("Derivative of %s is not %s but is\n", lhs_str, rhs_str);
-			expr_print(lhs);
-			return 1;
-		}
-	}
-	{
-		const char *lhs_str = "G:(X B+C (X D))";
-		const char *rhs_str = "(G B'+C' G D')";
-		ExprHandle lhs = expr_derivative(expr_parse(lhs_str));
-		ExprHandle rhs = expr_parse(rhs_str);
-		bool ok = expr_structural_equal(lhs, rhs);
-		if (!ok) {
-			printf("Derivative of %s is not %s but is\n", lhs_str, rhs_str);
-			expr_print(lhs);
-			return 1;
-		}
-	}
+	bool all_ok = true;
+	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
+	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
+	all_ok &= test_derivative("X:G", "G");
+	// all_ok &= test_error("dX:dX");
+	// all_ok &= test_error("A:dX dX");
 	{
 		const char *lhs_str = "A+(B+C)";
 		const char *rhs_str = "(A+B)+C";
@@ -899,11 +904,14 @@ main(int argc, char const *argv[]) {
 		bool ok = expr_structural_equal(lhs, rhs);
 		if (!ok) {
 			printf("%s is not structurally equal to %s\n", lhs_str, rhs_str);
-			return 1;
 		}
+		all_ok &= ok;
 	}
-	printf("OK!\n");
-	return 0;
+	if (all_ok) {
+		printf("OK!\n");
+		return 0;
+	}
+	return 1;
 #else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
