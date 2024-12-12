@@ -121,6 +121,7 @@ static uint16_t node_pool_watermark = 1;
 // "(A)+(B)".
 static char str_buf_arg0[COUNTOF(node_pool)*5 + 1];
 static char str_buf_arg1[COUNTOF(node_pool)*5 + 1];
+static char diff_var_name = 'X';
 
 static bool trace_execution;
 
@@ -300,15 +301,11 @@ expr_copy(ExprHandle handle) {
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
 }
 
-// TODO: This function should take as an argument the variable to which we are
-// differentiating w.r.t. . Now 'X' is always that variable.
 // TODO: this function should return a constant 0 if it does not find any
 // variable to differentiare w.r.t.
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	const ExprNode *node = expr_get_node(handle);
-
-	char wrt = 'X';
 
 	CHECK_KIND(7);
 	if (node->kind == KIND_NULL) {
@@ -316,7 +313,7 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 		return HANDLE_NULL;
 	}
 	if (node->kind == KIND_VAR) {
-		if (node->name == wrt) {
+		if (node->name == diff_var_name) {
 			*req_grad = true;
 			return expr_make_operator(KIND_DIFF, expr_copy(handle));
 		}
@@ -617,7 +614,10 @@ expr_expose_differentials(ExprHandle handle) {
 			} else goto panic;
 		}
 		assert(arg1_node->kind == KIND_DIFF);
+		if (expr_get_node(arg1_node->arg1)->name != diff_var_name)
+			panic(ERROR_BAD_DATA);
 		ExprHandle new_arg1 = expr_copy(arg1);
+		// A:dX
 		return expr_make_operator(KIND_INNER, A, new_arg1);
 	}
 
@@ -805,6 +805,7 @@ Grammar_primary(ParserState *state) {
 	panic(ERROR_BAD_DATA);
 }
 
+// TODO: parse differentials!
 static ExprHandle
 expr_parse(const char *expr) {
 	ParserState state = {.tokens = expr, .lentgh = strlen(expr)};
@@ -890,6 +891,8 @@ expr_derivative(ExprHandle handle) {
 // https://www.gingerbill.org/article/2019/02/16/memory-allocation-strategies-004/
 
 // TODO: print graphviz?
+// https://graphviz.org/Gallery/directed/Genetic_Programming.html
+// https://forum.graphviz.org/t/binary-tree-force-lonely-node-to-be-left-or-right/1159
 
 static bool
 test_derivative(const char *expr, const char *res) {
