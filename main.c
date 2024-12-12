@@ -21,6 +21,7 @@ void *memswp(void *restrict lhs, void *restrict rhs, size_t count) {
 	return lhs;
 }
 #define COUNTOF(a) (sizeof (a) / sizeof *(a))
+#define STRLEN(s) (sizeof (s) - 1)
 
 enum Error {
 	ERROR_BAD_ALLOC,
@@ -116,11 +117,8 @@ typedef struct ExprNode {
 
 static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
 static uint16_t node_pool_watermark = 1;
-// Over allocated buffers for writing expressions. We assume the worst case
-// possible that every node requires its arguments to be parenthesized e.g.
-// "(A)+(B)".
-static char str_buf_arg0[COUNTOF(node_pool)*5 + 1];
-static char str_buf_arg1[COUNTOF(node_pool)*5 + 1];
+static char str_buf_arg0[COUNTOF(node_pool)*STRLEN("()+()") + 1];
+static char str_buf_arg1[COUNTOF(node_pool)*STRLEN("()+()") + 1];
 static char diff_var_name = 'X';
 
 static bool trace_execution;
@@ -267,13 +265,12 @@ expr_make_operand(char name) {
 
 static ExprHandle
 expr_make_operator(Kind kind, ExprHandle arg0, ...) {
-	// FIXME: this is a stupid way to do it, we should panic instead...
 	if (kind != KIND_ADD
 		&& kind != KIND_MUL
 		&& kind != KIND_TRANS
 		&& kind != KIND_DIFF
 		&& kind != KIND_INNER) {
-		return HANDLE_NULL;
+		panic(ERROR_BAD_ARG);
 	}
 	ExprHandle arg1 = HANDLE_NULL;
 	if (kind != KIND_TRANS && kind != KIND_DIFF) {
@@ -385,6 +382,11 @@ expr_differentiate(ExprHandle handle) {
 	return expr_differentiate_internal(handle, &req_grad);
 }
 
+// NOTE: this function could distribute differentials but we would then need to
+// introduce contant zeros and eventually remove them from the tree... Can this
+// function be fused with expr_differentiate so that we avoid the creations of
+// constant zeros for differential while we distribute the other operations?
+// If so we could just distribute expressions like "d(G:F(x))".
 static ExprHandle
 expr_distr_internal(ExprHandle handle, bool *changed) {
 	const ExprNode *node = expr_get_node(handle);
@@ -623,12 +625,6 @@ panic:
 	panic(ERROR_BAD_DATA);
 }
 
-// If we assume the expression to be in "distributive normal form" the problem
-// is one of multivariate polynomial factoring. Grobner basis are a good topic
-// to take inspiration from (keeping in mind that matrix multiplication is not
-// commutative.) The polynomial need to be ordered in some way so that all
-// common factors appear near each other and are easy to factor. There also need
-// to be a way to factor expressions like X+X in X(I+I).
 static ExprHandle
 expr_factor_internal(ExprHandle handle, bool *changed) {
 	const ExprNode *node = expr_get_node(handle);
@@ -641,6 +637,7 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 	Kind arg0_kind = arg0_node->kind;
 	Kind arg1_kind = arg1_node->kind;
 	if (node->kind == KIND_ADD) {
+		// A'+B' => (A+B)'
 		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
 			*changed = true;
 			return expr_make_operator(KIND_TRANS,
@@ -652,6 +649,8 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 		}
 		if (arg0_kind == arg1_kind && (arg0_kind == KIND_MUL || arg1_kind == KIND_INNER)) {
 			Kind prod_kind = arg0_kind;
+			// A B+A C => A (B+C)
+			// A:B+A:C => A:(B+C)
 			if (expr_structural_equal(arg0_node->arg0, arg1_node->arg0)) {
 				*changed = true;
 				return expr_make_operator(prod_kind,
@@ -661,6 +660,8 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 						expr_factor_internal(arg1_node->arg1, changed))
 				);
 			}
+			// B A+C A => (B+C) A
+			// B:A+C:A => (B+C):A
 			if (expr_structural_equal(arg0_node->arg1, arg1_node->arg1)) {
 				*changed = true;
 				return expr_make_operator(prod_kind,
@@ -674,6 +675,7 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 		}
 	}
 	if (node->kind == KIND_MUL) {
+		// A' B' => (B A)'
 		if (arg0_node->kind == KIND_TRANS && arg1_node->kind == KIND_TRANS) {
 			*changed = true;
 			return expr_make_operator(KIND_TRANS,
@@ -969,10 +971,18 @@ main(int argc, char const *argv[]) {
 #else
 	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
+	// Queste due espressioni sono equivalenti ma www.matrixcalculus.org ritorna
+	// due espressioni sintatticamente diverse!
+	// tr(G'*(X*X+6*inv(I)*I)*(X*X-5*inv(I)*I))
+	// tr(G'*(X*X*X*X + 6*inv(I)*I*X*X) - X*X*5*inv(I)*I - 30*inv(I)*I)
+
 	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
-	// tr(G'*(E*F*(X+B)*(C+X))')
-	res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
+	// FIXME: Since we can't factor for constants we can't find the derivarive
+	// of the following two functions.
+	res = expr_parse("G:(X+X)"); expr_print(res); expr_stat(res);
+	res = expr_parse("G:(A X+A X)"); expr_print(res); expr_stat(res);
+	// res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
 	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
 	res = expr_derivative(res);
 	return 0;
