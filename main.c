@@ -973,8 +973,8 @@ main(int argc, char const *argv[]) {
 
 	// Queste due espressioni sono equivalenti ma www.matrixcalculus.org ritorna
 	// due espressioni sintatticamente diverse!
-	// tr(G'*(X*X+6*inv(I)*I)*(X*X-5*inv(I)*I))
-	// tr(G'*(X*X*X*X + 6*inv(I)*I*X*X) - X*X*5*inv(I)*I - 30*inv(I)*I)
+	// tr(G'*(X+6*inv(I)*I)*(X-5*inv(I)*I))
+	// tr(G'*(X*X + 6*inv(I)*I*X) - X*5*inv(I)*I - 30*inv(I)*I)
 
 	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
