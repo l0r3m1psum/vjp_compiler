@@ -537,10 +537,6 @@ expr_stat(ExprHandle handle) {
 // the left or the right a expr_get_argument function could be handy to avoid
 // trivial mistakes.
 
-// TODO: if a node (different from HANDLE_NULL) point to itself it can cause
-// function recursive function to stack overflow. This case should be catched
-// and reported. Is there any other potential infinite loop (without recursion?)
-
 static bool
 expr_has_differential(ExprHandle handle) {
 	const ExprNode *node = expr_get_node(handle);
@@ -948,6 +944,10 @@ main(int argc, char const *argv[]) {
 	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
 	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
 	all_ok &= test_derivative("X:G", "G");
+	// TODO: testing for errors now is not really possible. To make it feasible
+	// "error nodes" should be pre allocated in the node_pool and make them
+	// point to themselves, in this way any self pointg node is considered as a
+	// terminal and HANDLE_NULL is a terminal that contains "error success".
 	// all_ok &= test_error("dX:dX");
 	// all_ok &= test_error("A:dX dX");
 	{
