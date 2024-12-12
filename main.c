@@ -738,16 +738,18 @@ static char ParserState_match(ParserState *state, char type) {
 }
 
 /* The grammar to parse:
- *     term    -> factor ("+" factor)*;
- *     factor  -> unary (" " unary)*;
- *     unary   -> primary "'"*;
- *     primary -> VAR | "(" term ")";
+ *     term         -> factor ("+" factor)*;
+ *     factor       -> transpose (" " transpose)*;
+ *     transpose    -> differential "'"*;
+ *     differential -> "d"? primary;
+ *     primary      -> VAR | "(" term ")";
  */
-static ExprHandle Grammar_term    (ParserState *);
-static ExprHandle Grammar_inner   (ParserState *);
-static ExprHandle Grammar_factor  (ParserState *);
-static ExprHandle Grammar_unary   (ParserState *);
-static ExprHandle Grammar_primary (ParserState *);
+static ExprHandle Grammar_term         (ParserState *);
+static ExprHandle Grammar_inner        (ParserState *);
+static ExprHandle Grammar_factor       (ParserState *);
+static ExprHandle Grammar_transpose    (ParserState *);
+static ExprHandle Grammar_differential (ParserState *);
+static ExprHandle Grammar_primary      (ParserState *);
 
 static ExprHandle
 Grammar_term(ParserState *state) {
@@ -771,19 +773,29 @@ Grammar_inner(ParserState *state) {
 
 static ExprHandle
 Grammar_factor(ParserState *state) {
-	ExprHandle expr = Grammar_unary(state);
+	ExprHandle expr = Grammar_transpose(state);
 	while (ParserState_match(state, ' ')) {
-		ExprHandle right = Grammar_unary(state);
+		ExprHandle right = Grammar_transpose(state);
 		expr = expr_make_operator(KIND_MUL, expr, right);
 	}
 	return expr;
 }
 
 static ExprHandle
-Grammar_unary(ParserState *state) {
-	ExprHandle expr = Grammar_primary(state);
+Grammar_transpose(ParserState *state) {
+	ExprHandle expr = Grammar_differential(state);
 	while (ParserState_match(state, '\'')) {
 		expr = expr_make_operator(KIND_TRANS, expr);
+	}
+	return expr;
+}
+
+static ExprHandle
+Grammar_differential(ParserState *state) {
+	bool has_diff = ParserState_match(state, 'd');
+	ExprHandle expr = Grammar_primary(state);
+	if (has_diff) {
+		expr = expr_make_operator(KIND_DIFF, expr);
 	}
 	return expr;
 }
@@ -805,7 +817,6 @@ Grammar_primary(ParserState *state) {
 	panic(ERROR_BAD_DATA);
 }
 
-// TODO: parse differentials!
 static ExprHandle
 expr_parse(const char *expr) {
 	ParserState state = {.tokens = expr, .lentgh = strlen(expr)};
