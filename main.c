@@ -866,6 +866,11 @@ expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
 #define V if (trace_execution)
 
+	V printf("Steps for the derivation of\n");
+	V expr_print(res);
+	V printf("Equivalent expression to check result on https://www.matrixcalculus.org\n");
+	V expr_print_matrixcalculus(handle);
+
 	V printf("Step 1. Differential application;\n");
 	res = expr_differentiate(res);
 	V { expr_print(res); expr_stat(res); }
@@ -883,9 +888,6 @@ expr_derivative(ExprHandle handle) {
 	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
 
-	V printf("Equivalent expression to check result on https://www.matrixcalculus.org\n");
-	V expr_print_matrixcalculus(handle);
-
 	const ExprNode *node = expr_get_node(res);
 	// A(X):dX
 	assert(
@@ -893,7 +895,12 @@ expr_derivative(ExprHandle handle) {
 			? expr_get_node(node->arg1)->kind == KIND_DIFF
 			: node->kind == KIND_NULL
 	);
-	return node->arg0;
+	res = node->arg0;
+
+	V printf("Result\n");
+	V expr_print(res);
+
+	return res;
 #undef V
 }
 
@@ -931,7 +938,7 @@ main(int argc, char const *argv[]) {
 	char str_buf[256] = {0};
 	trace_execution = true;
 	while (printf("vJp> "), fgets(str_buf, sizeof str_buf, stdin) == str_buf) {
-		res = expr_parse(str_buf);            expr_print(res); expr_stat(res);
+		res = expr_parse(str_buf);
 		// TODO: check that the expression is parsed entirely with
 		// ParserState_is_at_end
 		res = expr_derivative(res);
@@ -977,6 +984,8 @@ main(int argc, char const *argv[]) {
 	// due espressioni sintatticamente diverse!
 	// tr(G'*(X+6*inv(I)*I)*(X-5*inv(I)*I))
 	// tr(G'*(X*X + 6*inv(I)*I*X - X*5*inv(I)*I - 30*inv(I)*I))
+	// Unaltro caso:
+	// tr(G'*((C+X)*G*E*F+G*E*F*(X+B))')
 
 	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
