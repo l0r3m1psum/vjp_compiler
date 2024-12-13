@@ -387,6 +387,8 @@ expr_differentiate(ExprHandle handle) {
 // function be fused with expr_differentiate so that we avoid the creations of
 // constant zeros for differential while we distribute the other operations?
 // If so we could just distribute expressions like "d(G:F(x))".
+// TODO: check that differentials, if present, is applied to the correct
+// variable directly.
 static ExprHandle
 expr_distr_internal(ExprHandle handle, bool *changed) {
 	const ExprNode *node = expr_get_node(handle);
