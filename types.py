@@ -2,6 +2,21 @@
 # https://lldb.llvm.org/python_api.html
 import lldb
 
+# TODO: convert this to a C++ module.
+# https://anadoxin.org/blog/buggy-lldb-api-cpp/
+# https://github.com/llvm-mirror/lldb/blob/master/examples/plugins/commands/fooplugin.cpp
+
+def __lldb_init_module(debugger: lldb.SBDebugger, dict) -> None:
+	type_name = lldb.SBTypeNameSpecifier("ExprNode", False)
+	summary = lldb.SBTypeSummary.CreateWithFunctionName("types.ExprNodeSummary")
+	synthetic = lldb.SBTypeSynthetic.CreateWithClassName("types.ExprNodeSyntheticChildrenProvider")
+	target = debugger.GetSelectedTarget()
+	category = debugger.GetDefaultCategory()
+	# type summary add -e -F types.ExprNodeSummary ExprNode
+	category.AddTypeSummary(type_name, summary)
+	# type synthetic add -l types.ExprNodeSyntheticChildrenProvider ExprNode
+	category.AddTypeSynthetic(type_name, synthetic)
+
 def fff(member_list: lldb.SBTypeEnumMemberList, name: str) -> int:
 	for member in member_list:
 		if member.name == name:
