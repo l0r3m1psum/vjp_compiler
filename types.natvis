@@ -2,6 +2,8 @@
 <!--
 https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects
 https://learn.microsoft.com/en-us/visualstudio/debugger/format-specifiers-in-cpp
+
+https://stackoverflow.com/a/11545420
 -->
 <AutoVisualizer
   xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
