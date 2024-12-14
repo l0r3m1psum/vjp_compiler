@@ -14,6 +14,15 @@ if sys.platform == 'darwin' and 'OMP_PREFIX' not in os.environ:
 		"then you can set the environment variable "
 		"OMP_PREFIX=openmp14/usr/local")
 
+# TODO: use torch.fx more directly to skip the Dynamo step and use
+# torch._inductor.compile_fx
+# https://pytorch.org/docs/stable/fx.html#torch.fx.Graph
+# https://github.com/pytorch/pytorch/blob/main/torch/_inductor/compile_fx.py
+
+# TODO: I have to inject my alogrithm in a function like this one:
+# https://github.com/pytorch/pytorch/blob/91bf2e16debdc41f5dde2bb5cc8e4f39f8955d4e/torch/_inductor/fx_passes/group_batch_fusion.py#L1294
+# But also for other kind of fusions and only for the backward pass.
+
 import torch
 import torch._inductor.config
 torch._inductor.config.debug = True
