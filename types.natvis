@@ -3,7 +3,25 @@
 https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects
 https://learn.microsoft.com/en-us/visualstudio/debugger/format-specifiers-in-cpp
 
+Old Visual Studio had a really nice way of doing "Expression Evaluator addins".
+It was done via a DLL that that had to implements functions to convert
+expression values of a certain type by getting a pointer to them and writing the
+string to a buffer. Documentation can be found here
+https://github.com/microsoft/VCSamples/tree/master/VC2010Samples/Debugging/EEaddin
+This method can still be used with modern natvis as shown here
 https://stackoverflow.com/a/11545420
+I have not found any way to get pointers to arbitrary symbols using this api. So
+if your type contains an handle to somethisg, there is no obvious way to get the
+base pointer to that handle.
+
+As far as I understand the evoulution of this old addin interface is via COM
+interfaces, which are documented here
+https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/reference/expression-evaluation-interfaces
+Some parts of the documentation say that it is deprecated, but I think it is
+only for CLR stuff, for native code this is still the way to go.
+
+https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/reference/ieevisualizerservice-getcustomviewerlist
+https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/visualizing-and-viewing-data
 -->
 <AutoVisualizer
   xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
