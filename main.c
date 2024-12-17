@@ -869,7 +869,7 @@ expr_derivative(ExprHandle handle) {
 	V printf("Steps for the derivation of\n");
 	V expr_print(res);
 	V printf("Equivalent expression to check result on https://www.matrixcalculus.org\n");
-	V expr_print_matrixcalculus(handle);
+	V expr_print_matrixcalculus(res);
 
 	V printf("Step 1. Differential application;\n");
 	res = expr_differentiate(res);
@@ -988,6 +988,8 @@ main(int argc, char const *argv[]) {
 	// tr(G'*(X*X + 6*inv(I)*I*X - X*5*inv(I)*I - 30*inv(I)*I))
 	// Unaltro caso:
 	// tr(G'*((C+X)*G*E*F+G*E*F*(X+B))')
+	// Matrixcalculus supports fractions but it does not do simplifications
+	// tr(G'*(matrix(5.5)+X))
 
 	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
