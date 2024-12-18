@@ -883,6 +883,9 @@ expr_derivative(ExprHandle handle) {
 	res = expr_expose_differentials(res);
 	V { expr_print(res); expr_stat(res); }
 
+	// TODO: implement sorting.
+	// TODO: constant folding.
+
 	V printf("Step 4. Factorization.\n");
 	res = expr_distr(res);
 	res = expr_factor(res);
