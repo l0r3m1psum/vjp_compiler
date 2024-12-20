@@ -109,11 +109,13 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // need to propagte this information arround when contructing new nodes.)
 typedef struct ExprNode {
 	uint8_t kind;
-	char name;
+	union { char name; uint8_t val; };
 	// char padding[1];
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
+typedef const ExprNode * ExprNodeRef;
+
 
 static ExprNode node_pool[HANDLE_MAX_VALUE + 1];
 static uint16_t node_pool_watermark = 1;
@@ -124,14 +126,14 @@ static char diff_var_name = 'X';
 static bool trace_execution;
 
 // NOTE: the struture is so small that I could also return it by value...
-static const ExprNode *
+static ExprNodeRef
 expr_get_node(ExprHandle handle) {
 	return node_pool + handle.value;
 }
 
 static char
 expr_char(ExprHandle handle) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:  return '\0';
@@ -153,7 +155,7 @@ expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
 			else *(*buf)++ = (c), (*len)--; \
 		} while (0)
 
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return true;
 	}
@@ -289,7 +291,7 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 
 static ExprHandle
 expr_copy(ExprHandle handle) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
 	}
@@ -302,7 +304,7 @@ expr_copy(ExprHandle handle) {
 // variable to differentiare w.r.t.
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 
 	CHECK_KIND(7);
 	if (node->kind == KIND_NULL) {
@@ -391,9 +393,9 @@ expr_differentiate(ExprHandle handle) {
 // variable directly.
 static ExprHandle
 expr_distr_internal(ExprHandle handle, bool *changed) {
-	const ExprNode *node = expr_get_node(handle);
-	const ExprNode *arg0_node = expr_get_node(node->arg0);
-	const ExprNode *arg1_node = expr_get_node(node->arg1);
+	ExprNodeRef node = expr_get_node(handle);
+	ExprNodeRef arg0_node = expr_get_node(node->arg0);
+	ExprNodeRef arg1_node = expr_get_node(node->arg1);
 
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
@@ -501,7 +503,7 @@ expr_distr(ExprHandle handle) {
 
 static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	CHECK_KIND(7);
 	switch (node->kind) {
 	case KIND_NULL:
@@ -543,7 +545,7 @@ expr_stat(ExprHandle handle) {
 
 static bool
 expr_has_differential(ExprHandle handle) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return false;
 	}
@@ -561,7 +563,7 @@ expr_has_differential(ExprHandle handle) {
 // tree afterwards.
 static ExprHandle
 expr_expose_differentials(ExprHandle handle) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
 	}
@@ -584,7 +586,7 @@ expr_expose_differentials(ExprHandle handle) {
 			memswp(&arg0, &arg1, sizeof arg0);
 		}
 		ExprHandle A = expr_copy(arg0);
-		const ExprNode *arg1_node = NULL;
+		ExprNodeRef arg1_node = NULL;
 		while (arg1_node = expr_get_node(arg1), arg1_node->kind != KIND_DIFF) {
 			ExprHandle B = arg1_node->arg0;
 			ExprHandle C = arg1_node->arg1;
@@ -629,13 +631,13 @@ panic:
 
 static ExprHandle
 expr_factor_internal(ExprHandle handle, bool *changed) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return HANDLE_NULL;
 	}
 
-	const ExprNode *arg0_node = expr_get_node(node->arg0);
-	const ExprNode *arg1_node = expr_get_node(node->arg1);
+	ExprNodeRef arg0_node = expr_get_node(node->arg0);
+	ExprNodeRef arg1_node = expr_get_node(node->arg1);
 	Kind arg0_kind = arg0_node->kind;
 	Kind arg1_kind = arg1_node->kind;
 	if (node->kind == KIND_ADD) {
@@ -825,7 +827,7 @@ expr_parse(const char *expr) {
 
 static void
 expr_print_matrixcalculus_internal(ExprHandle handle) {
-	const ExprNode *node = expr_get_node(handle);
+	ExprNodeRef node = expr_get_node(handle);
 	if (node->kind == KIND_NULL) {
 		return;
 	}
@@ -861,6 +863,101 @@ expr_print_matrixcalculus(ExprHandle handle) {
 	printf("\n");
 }
 
+#if 0
+static ExprHandle
+expr_get_with_count(ExprHandle handle, uint8_t *count) {
+	ExprNodeRef node = expr_get_node(handle);
+	uint8_t res_count = 1;
+	ExprHandle res_handle = handle;
+	if (node->kind == KIND_MUL) {
+		ExprNodeRef arg0_node = expr_get_node(node->arg0);
+		ExprNodeRef arg1_node = expr_get_node(node->arg1);
+		if (arg0_node->kind == KIND_CONST) {
+			res_count = arg0_node->val;
+			res_handle = arg0_node->arg0;
+		}
+		if (arg1_node->kind == KIND_CONST) {
+			res_count = arg1_node->val;
+			res_handle = arg1_node->arg0;
+		}
+	}
+	// NOTE: Should I return 0 for KIND_NULL?
+	return *count = res_count, res_handle;
+}
+#endif
+
+static void
+traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count) {
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return;
+	}
+	if (node->kind == KIND_ADD) traverse_test_internal(node->arg0, prev, count);
+	if (node->kind != KIND_ADD) {
+		if (expr_structural_equal(handle, *prev)) {
+			(*count)++;
+		} else {
+			// Append now!
+			*count = 1;
+		}
+		printf("count=%d ", *count);
+		expr_print(handle);
+		*prev = handle;
+		return;
+	}
+	if (node->kind == KIND_ADD) traverse_test_internal(node->arg1, prev, count);
+}
+
+static void
+traverse_test(ExprHandle handle) {
+	ExprHandle prev = HANDLE_NULL;
+	uint8_t count = 1;
+	traverse_test_internal(handle, &prev, &count);
+}
+// FIXME: this implementation is wrong because it traverses the tree in the
+// wrong order!
+static ExprHandle
+expr_accumulate_internal(ExprHandle handle) {
+	traverse_test(handle);
+	return handle;
+#if 0 /************************************************************************/
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return HANDLE_NULL;
+	}
+	if (node->kind == KIND_VAR || node->kind == KIND_CONST) {
+		return expr_copy(handle);
+	}
+
+	// Here lower case are identity matrices multiplied by a constant.
+	// n X+m X = X n+m X = n X+X m = X n+X m = (n+m) X
+	// n X m X = X n m X = n X X m = X n X m = (n m) X
+	if (node->kind == KIND_ADD || node->kind == KIND_ADD) {
+		uint8_t arg0_count = 0;
+		ExprHandle arg0 = expr_get_with_count(node->arg0, &arg0_count);
+		uint8_t arg1_count = 0;
+		ExprHandle arg1 = expr_get_with_count(node->arg1, &arg0_count);
+		if (expr_structural_equal(arg0, arg1)) {
+			uint8_t res_count = node->kind == KIND_ADD
+				? arg0_count+arg1_count
+				: arg0_count*arg1_count;
+			return expr_make_operator(KIND_MUL,
+				expr_make_operator(KIND_CONST, res_count),
+				expr_copy(arg0)
+			);
+		}
+	}
+
+	return expr_make_operator(node->kind, node->arg0, node->arg1);
+#endif /***********************************************************************/
+}
+
+static ExprHandle
+expr_accumulate(ExprHandle handle) {
+	// TODO: this operation has to be done ad nauseam.
+	return expr_accumulate_internal(handle);
+}
+
 static ExprHandle
 expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
@@ -885,19 +982,22 @@ expr_derivative(ExprHandle handle) {
 
 	// TODO: implement sorting.
 	// TODO: constant folding.
+	res = expr_accumulate(res);
 
 	V printf("Step 4. Factorization.\n");
 	res = expr_distr(res);
 	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
 
-	const ExprNode *node = expr_get_node(res);
+	ExprNodeRef node = expr_get_node(res);
 	// A(X):dX
+#if 0
 	assert(
 		node->kind == KIND_INNER
 			? expr_get_node(node->arg1)->kind == KIND_DIFF
 			: node->kind == KIND_NULL
 	);
+ #endif
 	res = node->arg0;
 
 	V printf("Result\n");
@@ -993,6 +1093,9 @@ main(int argc, char const *argv[]) {
 	// tr(G'*((C+X)*G*E*F+G*E*F*(X+B))')
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
+
+	traverse_test(expr_parse("(A C+B A)+(B A+B A)+B"));
+	return 0;
 
 	trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
