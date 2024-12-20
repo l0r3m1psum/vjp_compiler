@@ -897,7 +897,7 @@ traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count) {
 		if (expr_structural_equal(handle, *prev)) {
 			(*count)++;
 		} else {
-			// Append now!
+			printf("append "); expr_print(*prev);
 			*count = 1;
 		}
 		printf("count=%d ", *count);
