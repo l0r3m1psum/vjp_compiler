@@ -1,12 +1,12 @@
 IFS='' read -r -d '' payload <<'EOF'
 {
 	"expression": "x'*A*x + c*sin(y)'*x",
-	"wrt": {"name":"x","type":"vector"},
+	"wrt": {"name": "x", "type": "vector"},
 	"varList": [
-		{"name":"A","type":"symmetric matrix"},
-		{"name":"c","type":"scalar"},
-		{"name":"x","type":"vector"},
-		{"name":"y","type":"vector"}
+		{"name": "A", "type": "symmetric matrix"},
+		{"name": "c", "type": "scalar"},
+		{"name": "x", "type": "vector"},
+		{"name": "y", "type": "vector"}
 	],
 	"n": 4
 }
