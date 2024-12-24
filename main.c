@@ -850,7 +850,7 @@ expr_print_matrixcalculus_internal(ExprHandle handle) {
 	if (node_is_inner || node->kind == KIND_MUL) printf("*");
 	else printf("%c", expr_char(handle));
 
-	if (node_is_inner) ;
+	if (node_is_inner) {}
 		if (arg1_print_parenthesis) printf("(");
 		expr_print_matrixcalculus_internal(node->arg1);
 		if (arg1_print_parenthesis) printf(")");
@@ -897,10 +897,10 @@ traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count) {
 		if (expr_structural_equal(handle, *prev)) {
 			(*count)++;
 		} else {
-			printf("append "); expr_print(*prev);
+			if (expr_is_valid(*prev)) printf("append %d ", *count), expr_print(*prev);
 			*count = 1;
 		}
-		printf("count=%d ", *count);
+		// printf("count=%d ", *count);
 		expr_print(handle);
 		*prev = handle;
 		return;
@@ -913,6 +913,7 @@ traverse_test(ExprHandle handle) {
 	ExprHandle prev = HANDLE_NULL;
 	uint8_t count = 1;
 	traverse_test_internal(handle, &prev, &count);
+	if (expr_is_valid(prev)) printf("append %d ", count), expr_print(prev);
 }
 // FIXME: this implementation is wrong because it traverses the tree in the
 // wrong order!
@@ -1094,7 +1095,7 @@ main(int argc, char const *argv[]) {
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
 
-	traverse_test(expr_parse("(A C+B A)+(B A+B A)+B"));
+	traverse_test(expr_parse("(A C+B A)+(B A+B A)+B+B"));
 	return 0;
 
 	trace_execution = true;
