@@ -2,7 +2,9 @@
 *.ilk
 *.pdb
 *.obj
+*.dSYM
 .vs/
 python/torch_compile_debug/
 python/torch_logs_out.txt
 python/venv/
+python/openmp14
