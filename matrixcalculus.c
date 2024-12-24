@@ -77,7 +77,6 @@ int main() {
         "Accept: */*\r\n"
         "Content-Type: application/json\r\n"
         "Connection: close\r\n" // https://stackoverflow.com/a/17438094
-        // TODO: set timeout if not supported.
         "Content-Length: %zu\r\n"
         "\r\n"
         "%s",
