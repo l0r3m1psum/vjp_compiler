@@ -2,6 +2,7 @@
  */
 
 // TODO: Win32 port.
+// https://learn.microsoft.com/it-it/windows/win32/api/winsock2/nf-winsock2-send
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 int main() {
     int sockfd = -1;
     {
+        // https://w3.cs.jmu.edu/kirkpams/OpenCSF/Books/csf/html/UDPSockets.html
         int err = 0;
         struct addrinfo
             hint = {
@@ -89,8 +91,11 @@ int main() {
     while ((transmitted_bytes = recv(sockfd, buffer, sizeof buffer - 1, 0)) > 0) {
         buffer[transmitted_bytes] = '\0';
         printf("%s", buffer);
+        // https://www.json.org/json-en.html
     }
     if (transmitted_bytes == -1) fprintf(stderr, "%s\n", strerror(errno));
+
+    // https://blog.netherlabs.nl/articles/2009/01/18/the-ultimate-so_linger-page-or-why-is-my-tcp-not-reliable
 
     // close(sockfd);
     return 0;
