@@ -3,7 +3,9 @@
 *.pdb
 *.obj
 *.dSYM
+*.sublime-workspace
 .vs/
+.DS_Store
 python/torch_compile_debug/
 python/torch_logs_out.txt
 python/venv/
