@@ -59,20 +59,17 @@ panic(enum Error err) {
 	exit(1);
 }
 
-// TODO: Add support for constants of the matrix multiplication ring. Note that
-// this may add some complication to the algorithm, especially for factoring
-// integer. Given the fact that factoring integer is rarely going to be used we
-// are going to implement this feature later.
 typedef enum Kind {
 	KIND_NULL,
 	KIND_VAR,
+	KIND_CONST,
 	KIND_ADD,
 	KIND_MUL,
 	KIND_TRANS,
 	KIND_DIFF,
 	KIND_INNER,
 } Kind;
-#define KIND_COUNT 7
+#define KIND_COUNT 8
 #define CHECK_KIND(n) _Static_assert(KIND_COUNT == (n), \
 	"the number of elements in the Kind enumeration has changed")
 
@@ -80,15 +77,16 @@ typedef enum Kind {
 // third, ...)
 static int
 kind_precedence(Kind kind) {
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	switch (kind) {
 	case KIND_NULL:  return 0;
 	case KIND_VAR:   return 0;
-	case KIND_ADD:   return 5;
-	case KIND_MUL:   return 3;
-	case KIND_TRANS: return 2;
+	case KIND_CONST: return 0;
 	case KIND_DIFF:  return 1;
+	case KIND_TRANS: return 2;
+	case KIND_MUL:   return 3;
 	case KIND_INNER: return 4;
+	case KIND_ADD:   return 5;
 	}
 	panic(ERROR_BAD_ARG);
 }
@@ -97,10 +95,8 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 #define HANDLE_MAX_VALUE UINT16_MAX
 #define HANDLE_NULL ((ExprHandle){0})
 
-// NOTE: For debuging it would be better to have a string instead of a single
-// character, also probably generating names automatically like A000, A001,
-// ecc... Would make things more ergonomic. If names are generated automatically
-// a numerical ID shall be used instead.
+// TODO: use an hash table to be able to use multicharacter names for the
+// matrices and use the index in the table as the ID of the node.
 // NOTE: there are two functions that need to know where the differential are
 // down the tree (i.e. expr_differentiate_internal and
 // expr_expose_differentials) the req_grad bit could be added by
@@ -109,8 +105,7 @@ typedef struct ExprHandle { uint16_t value; } ExprHandle;
 // need to propagte this information arround when contructing new nodes.)
 typedef struct ExprNode {
 	uint8_t kind;
-	union { char name; uint8_t val; };
-	// char padding[1];
+	union { uint8_t name; uint8_t val; };
 	ExprHandle arg0;
 	ExprHandle arg1;
 } ExprNode;
@@ -131,23 +126,6 @@ expr_get_node(ExprHandle handle) {
 	return node_pool + handle.value;
 }
 
-static char
-expr_char(ExprHandle handle) {
-	ExprNodeRef node = expr_get_node(handle);
-	CHECK_KIND(7);
-	switch (node->kind) {
-	case KIND_NULL:  return '\0';
-	// NOTE: We should allow only upper case letters
-	case KIND_VAR:   return node->name;
-	case KIND_ADD:   return '+';
-	case KIND_MUL:   return ' ';
-	case KIND_TRANS: return '\'';
-	case KIND_DIFF:  return 'd';
-	case KIND_INNER: return ':';
-	}
-	panic(ERROR_BAD_ARG);
-}
-
 static bool
 expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
 #define TRY_WRITE(c) do { \
@@ -156,9 +134,7 @@ expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
 		} while (0)
 
 	ExprNodeRef node = expr_get_node(handle);
-	if (node->kind == KIND_NULL) {
-		return true;
-	}
+	if (node->kind == KIND_NULL) { return true; }
 
 	int node_precedence = kind_precedence(node->kind);
 	int arg0_precedence = kind_precedence(expr_get_node(node->arg0)->kind);
@@ -166,27 +142,39 @@ expr_write_internal(ExprHandle handle, char **buf, size_t *len) {
 	bool arg0_print_parenthesis = arg0_precedence > node_precedence;
 	bool arg1_print_parenthesis = arg1_precedence > node_precedence;
 
-	if (arg0_print_parenthesis) {
-		TRY_WRITE('(');
-	}
-	if (!expr_write_internal(node->arg0, buf, len)) {
-		return false;
-	}
-	if (arg0_print_parenthesis) {
-		TRY_WRITE(')');
+	if (arg0_print_parenthesis) { TRY_WRITE('('); }
+	if (!expr_write_internal(node->arg0, buf, len)) { return false; }
+	if (arg0_print_parenthesis) { TRY_WRITE(')'); }
+
+	CHECK_KIND(8);
+	switch (node->kind) {
+	case KIND_NULL:  TRY_WRITE('\0'); break;
+	// NOTE: We should allow only upper case letters
+	case KIND_VAR:   TRY_WRITE(node->name); break;
+	case KIND_CONST: {
+		uint8_t val = node->val;
+		char digits_buf[3] = {0}, *digits_ptr = digits_buf;
+		static_assert(UINT8_MAX == 255, "");
+		do {
+			*digits_ptr++ = val%(uint8_t)10 + (uint8_t)'0';
+		} while ((val /= (uint8_t)10));
+		while (digits_ptr-- != digits_buf) {
+			assert(digits_buf <= digits_ptr);
+			TRY_WRITE(*digits_ptr);
+		}
+		TRY_WRITE('.');
+		TRY_WRITE('I');
+	}; break;
+	case KIND_ADD:   TRY_WRITE('+'); break;
+	case KIND_MUL:   TRY_WRITE(' '); break;
+	case KIND_TRANS: TRY_WRITE('\''); break;
+	case KIND_DIFF:  TRY_WRITE('d'); break;
+	case KIND_INNER: TRY_WRITE(':'); break;
 	}
 
-	TRY_WRITE(expr_char(handle));
-
-	if (arg1_print_parenthesis) {
-		TRY_WRITE('(');
-	}
-	if (!expr_write_internal(node->arg1, buf, len)) {
-		return false;
-	}
-	if (arg1_print_parenthesis) {
-		TRY_WRITE(')');
-	}
+	if (arg1_print_parenthesis) { TRY_WRITE('('); }
+	if (!expr_write_internal(node->arg1, buf, len)) { return false; }
+	if (arg1_print_parenthesis) { TRY_WRITE(')'); }
 	return true;
 #undef TRY_WRITE
 }
@@ -230,6 +218,9 @@ expr_is_valid(ExprHandle handle) {
 }
 
 // TODO: find a way to order commutative operators.
+// NOTE: This function can probably be implemented recursivelly (without doing
+// string comparisons) going down two tree like expr_write does but waiting for
+// the recursion to "sync-up".
 static bool
 expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
 	bool ok = false;
@@ -239,7 +230,7 @@ expr_structural_equal(ExprHandle arg0, ExprHandle arg1) {
 }
 
 static ExprHandle
-expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
+expr_make_node(Kind kind, uint8_t name_or_val, ExprHandle arg0, ExprHandle arg1) {
 	if (node_pool_watermark == HANDLE_MAX_VALUE) {
 		panic(ERROR_BAD_ALLOC);
 	}
@@ -253,7 +244,7 @@ expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 	}
 	node_pool[res.value] = (ExprNode){
 		.kind = kind,
-		.name = name,
+		.name = name_or_val,
 		.arg0 = arg0,
 		.arg1 = arg1,
 	};
@@ -261,12 +252,15 @@ expr_make_node(Kind kind, char name, ExprHandle arg0, ExprHandle arg1) {
 }
 
 static ExprHandle
-expr_make_operand(char name) {
-	return expr_make_node(KIND_VAR, name, HANDLE_NULL, HANDLE_NULL);
+expr_make_operand(Kind kind, uint8_t name_or_val) {
+	if (kind != KIND_VAR && kind != KIND_CONST) {
+		panic(ERROR_BAD_ARG);
+	}
+	return expr_make_node(kind, name_or_val, HANDLE_NULL, HANDLE_NULL);
 }
 
 static ExprHandle
-expr_make_operator(Kind kind, ExprHandle arg0, ...) {
+expr_make_operator(Kind kind, ExprHandle arg0, ExprHandle arg1) {
 	if (kind != KIND_ADD
 		&& kind != KIND_MUL
 		&& kind != KIND_TRANS
@@ -274,13 +268,12 @@ expr_make_operator(Kind kind, ExprHandle arg0, ...) {
 		&& kind != KIND_INNER) {
 		panic(ERROR_BAD_ARG);
 	}
-	ExprHandle arg1 = HANDLE_NULL;
 	if (kind != KIND_TRANS && kind != KIND_DIFF) {
-		va_list args;
-		va_start(args, arg0);
-		arg1 = va_arg(args, ExprHandle);
-		va_end(args);
-	} else if (kind == KIND_DIFF) {
+		if (!expr_is_valid(arg1)) panic(ERROR_BAD_ARG);
+	} else {
+		if (expr_is_valid(arg1)) panic(ERROR_BAD_ARG);
+	}
+	if (kind == KIND_DIFF) {
 		// This is done to make the print function work seamlessly with unary
 		// operators that have to appear on the left of their argument. Think of
 		// arg0 as the lhs and arg1 as the rhs of a binary operator.
@@ -300,13 +293,11 @@ expr_copy(ExprHandle handle) {
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
 }
 
-// TODO: this function should return a constant 0 if it does not find any
-// variable to differentiare w.r.t.
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNodeRef node = expr_get_node(handle);
 
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	if (node->kind == KIND_NULL) {
 		*req_grad = false;
 		return HANDLE_NULL;
@@ -314,8 +305,12 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	if (node->kind == KIND_VAR) {
 		if (node->name == diff_var_name) {
 			*req_grad = true;
-			return expr_make_operator(KIND_DIFF, expr_copy(handle));
+			return expr_make_operator(KIND_DIFF, expr_copy(handle), HANDLE_NULL);
 		}
+		*req_grad = false;
+		return HANDLE_NULL;
+	}
+	if (node->kind == KIND_CONST) {
 		*req_grad = false;
 		return HANDLE_NULL;
 	}
@@ -333,7 +328,7 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 
 	if (node->kind == KIND_TRANS) {
 		*req_grad = true;
-		return expr_make_operator(KIND_TRANS, arg0_der);
+		return expr_make_operator(KIND_TRANS, arg0_der, HANDLE_NULL);
 	}
 	if (node->kind == KIND_ADD) {
 		if (arg0_req_grad && arg1_req_grad) {
@@ -381,7 +376,19 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 static ExprHandle
 expr_differentiate(ExprHandle handle) {
 	bool req_grad = true;
-	return expr_differentiate_internal(handle, &req_grad);
+	ExprHandle res = expr_differentiate_internal(handle, &req_grad);
+	if (!expr_is_valid(res)) {
+		// Instead of returning just 0.I we return 0.I:dX because in this way
+		// expr_expose_differentials and other functions can be left unchanged.
+		res = expr_make_operator(KIND_INNER,
+			expr_make_operand(KIND_CONST, 0),
+			expr_make_operator(KIND_DIFF,
+				expr_make_operand(KIND_VAR, diff_var_name),
+				HANDLE_NULL
+			)
+		);
+	}
+	return res;
 }
 
 // NOTE: this function could distribute differentials but we would then need to
@@ -401,9 +408,16 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		return HANDLE_NULL;
 	}
 
-	// TODO: transpose interact with the inner product in the following ways
-	// (A:B)' => A:B and A':B' => A:B
-	// Can this break factoring later? I should think of a test case for this
+	// Transpose interact with the inner product and the constanta in the
+	// following ways
+	// (A:B)' => A:B
+	// A':B'  => A:B
+	//  c.I'  => c.I
+	// We say that they are transpose invariant i.e. we can consider the
+	// transpose to be applied to them or not.
+	// TODO: when transpose interacts with any of this two operations remove it
+	// and take advantage of this property when factoring.
+
 	if (node->kind == KIND_TRANS) {
 		if (arg0_node->kind == KIND_TRANS) {
 			// (A')' => A
@@ -414,16 +428,26 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 			// (A+B)' => A' + B'
 			*changed = true;
 			return expr_make_operator(KIND_ADD,
-				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg0, changed)),
-				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg1, changed))
+				expr_make_operator(KIND_TRANS,
+					expr_distr_internal(arg0_node->arg0, changed),
+					HANDLE_NULL
+				), expr_make_operator(KIND_TRANS,
+					expr_distr_internal(arg0_node->arg1, changed),
+					HANDLE_NULL
+				)
 			);
 		}
 		if (arg0_node->kind == KIND_MUL) {
 			// (A B)' => B'A'
 			*changed = true;
 			return expr_make_operator(KIND_MUL,
-				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg1, changed)),
-				expr_make_operator(KIND_TRANS, expr_distr_internal(arg0_node->arg0, changed))
+				expr_make_operator(KIND_TRANS,
+					expr_distr_internal(arg0_node->arg1, changed),
+					HANDLE_NULL
+				), expr_make_operator(KIND_TRANS,
+					expr_distr_internal(arg0_node->arg0, changed),
+					HANDLE_NULL
+				)
 			);
 		}
 	}
@@ -478,7 +502,7 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		}
 	}
 
-	if (node->kind == KIND_VAR) {
+	if (node->kind == KIND_VAR || node->kind == KIND_CONST) {
 		return expr_copy(handle);
 	}
 	return expr_make_node(node->kind, node->name,
@@ -504,10 +528,11 @@ expr_distr(ExprHandle handle) {
 static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
 	ExprNodeRef node = expr_get_node(handle);
-	CHECK_KIND(7);
+	CHECK_KIND(8);
 	switch (node->kind) {
 	case KIND_NULL:
 		break;
+	case KIND_CONST:
 	case KIND_VAR:
 		(*operand_count)++;
 		break;
@@ -540,7 +565,7 @@ expr_stat(ExprHandle handle) {
 }
 
 // TODO: to avoid having to remember which unary operations have the argument on
-// the left or the right a expr_get_argument function could be handy to avoid
+// the left or the right a expr_single_child function could be handy to avoid
 // trivial mistakes.
 
 static bool
@@ -550,17 +575,16 @@ expr_has_differential(ExprHandle handle) {
 		return false;
 	}
 	if (node->kind == KIND_DIFF) {
-		return true;
+		ExprNodeRef child_node = expr_get_node(node->arg1);
+		bool res = child_node->kind == KIND_VAR
+			&& child_node->name == diff_var_name;
+		return res;
 	}
 	return expr_has_differential(node->arg0)
 		|| expr_has_differential(node->arg1);
 }
 
 // TODO: use the DFS trick to avoid having to call expr_has_differential.
-// NOTE: this function requires a distribution round afterwards for the nested
-// transpositions. It could be applied every time we move an operation from the
-// other side of the inner product to reduce the number of copies of the entire
-// tree afterwards.
 static ExprHandle
 expr_expose_differentials(ExprHandle handle) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -586,7 +610,7 @@ expr_expose_differentials(ExprHandle handle) {
 			memswp(&arg0, &arg1, sizeof arg0);
 		}
 		ExprHandle A = expr_copy(arg0);
-		ExprNodeRef arg1_node = NULL;
+		ExprNodeRef arg1_node = expr_get_node(HANDLE_NULL);
 		while (arg1_node = expr_get_node(arg1), arg1_node->kind != KIND_DIFF) {
 			ExprHandle B = arg1_node->arg0;
 			ExprHandle C = arg1_node->arg1;
@@ -598,20 +622,20 @@ expr_expose_differentials(ExprHandle handle) {
 					// A:B C => B' A:C
 					A = expr_make_operator(KIND_MUL,
 						A,
-						expr_make_operator(KIND_TRANS, expr_copy(C))
+						expr_make_operator(KIND_TRANS, expr_copy(C), HANDLE_NULL)
 					);
 					arg1 = B;
 				} else {
 					// A:B C => A C':B
 					A = expr_make_operator(KIND_MUL,
-						expr_make_operator(KIND_TRANS, expr_copy(B)),
+						expr_make_operator(KIND_TRANS, expr_copy(B), HANDLE_NULL),
 						A
 					);
 					arg1 = C;
 				}
 			} else if (arg1_node->kind == KIND_TRANS) {
 				// A:B' => A':B
-				A = expr_make_operator(KIND_TRANS, A);
+				A = expr_make_operator(KIND_TRANS, A, HANDLE_NULL);
 				arg1 = B;
 			} else goto panic;
 		}
@@ -648,7 +672,8 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 				expr_make_operator(KIND_ADD,
 					expr_factor_internal(arg0_node->arg0, changed),
 					expr_factor_internal(arg1_node->arg0, changed)
-				)
+				),
+				HANDLE_NULL
 			);
 		}
 		if (arg0_kind == arg1_kind && (arg0_kind == KIND_MUL || arg1_kind == KIND_INNER)) {
@@ -686,12 +711,13 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 				expr_make_operator(KIND_MUL,
 					expr_factor_internal(arg1_node->arg0, changed),
 					expr_factor_internal(arg0_node->arg0, changed)
-				)
+				),
+				HANDLE_NULL
 			);
 		}
 	}
 
-	if (node->kind == KIND_VAR) {
+	if (node->kind == KIND_VAR || node->kind == KIND_CONST) {
 		return expr_copy(handle);
 	}
 
@@ -701,6 +727,7 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 	);
 }
 
+// Best effort factoring, it does not support integer factoring.
 static ExprHandle
 expr_factor(ExprHandle handle) {
 	bool changed = true;
@@ -726,8 +753,9 @@ ParserState_is_at_end(const ParserState *state) {
 	return state->lentgh == state->current;
 }
 
-static char ParserState_match(ParserState *state, char type) {
-	// NOTE: in we always pass 0 terminated strings this check is unnecessary
+static char
+ParserState_match(ParserState *state, char type) {
+	// NOTE: if we always pass 0 terminated strings this check is unnecessary
 	// and we can just unconditionally return peek since '\0' should never be a
 	// type to match.
 	if (ParserState_is_at_end(state)) return '\0';
@@ -744,7 +772,9 @@ static char ParserState_match(ParserState *state, char type) {
  *     factor       -> transpose (" " transpose)*;
  *     transpose    -> differential "'"*;
  *     differential -> "d"? primary;
- *     primary      -> VAR | "(" term ")";
+ *     primary      -> variable | number.I | "(" term ")";
+ *     variable     -> [A-HJ-Z];
+ *     number       -> 0|[1-9][0-9]*;
  */
 static ExprHandle Grammar_term         (ParserState *);
 static ExprHandle Grammar_inner        (ParserState *);
@@ -787,7 +817,7 @@ static ExprHandle
 Grammar_transpose(ParserState *state) {
 	ExprHandle expr = Grammar_differential(state);
 	while (ParserState_match(state, '\'')) {
-		expr = expr_make_operator(KIND_TRANS, expr);
+		expr = expr_make_operator(KIND_TRANS, expr, HANDLE_NULL);
 	}
 	return expr;
 }
@@ -797,7 +827,7 @@ Grammar_differential(ParserState *state) {
 	bool has_diff = ParserState_match(state, 'd');
 	ExprHandle expr = Grammar_primary(state);
 	if (has_diff) {
-		expr = expr_make_operator(KIND_DIFF, expr);
+		expr = expr_make_operator(KIND_DIFF, expr, HANDLE_NULL);
 	}
 	return expr;
 }
@@ -805,8 +835,33 @@ Grammar_differential(ParserState *state) {
 static ExprHandle
 Grammar_primary(ParserState *state) {
 	for (char letter = 'A'; letter <= 'Z'; letter++) {
+		if (letter == 'I') continue;
 		if (ParserState_match(state, letter)) {
-			return expr_make_operand(letter);
+			return expr_make_operand(KIND_VAR, letter);
+		}
+	}
+	if (ParserState_match(state, '0')) {
+		if (ParserState_match(state, '.')
+			&& ParserState_match(state, 'I')) {
+			return expr_make_operand(KIND_CONST, 0);
+		}
+		panic(ERROR_BAD_DATA);
+	}
+	for (char nonzero_digit = '1'; nonzero_digit <= '9'; nonzero_digit++) {
+		uint8_t match = 0;
+		uint8_t val = 0;
+		if ((match = ParserState_match(state, nonzero_digit))) {
+			val = val*((uint8_t) 10) + match - (uint8_t)'0';
+			for (char digit = '0'; digit <= '9'; digit++) {
+				while ((match = ParserState_match(state, digit))) {
+					val = val*((uint8_t) 10) + match - (uint8_t)'0';
+				}
+			}
+			if (ParserState_match(state, '.')
+				&& ParserState_match(state, 'I')) {
+				return expr_make_operand(KIND_CONST, val);
+			}
+			panic(ERROR_BAD_DATA);
 		}
 	}
 	if (ParserState_match(state, '(')) {
@@ -825,6 +880,7 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
+// TODO: make this an str like funciton too.
 static void
 expr_print_matrixcalculus_internal(ExprHandle handle) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -847,8 +903,19 @@ expr_print_matrixcalculus_internal(ExprHandle handle) {
 		if (arg0_print_parenthesis) printf(")");
 	if (node_is_inner) printf("'");
 
-	if (node_is_inner || node->kind == KIND_MUL) printf("*");
-	else printf("%c", expr_char(handle));
+	CHECK_KIND(8);
+	switch (node->kind) {
+	case KIND_NULL:  assert(false); break; // This shuld never happen...
+	// NOTE: We should allow only upper case letters
+	case KIND_VAR:   printf("%c", node->name); break;
+	case KIND_CONST: printf("%d*", node->val); break;
+	case KIND_ADD:   printf("+"); break;
+	case KIND_INNER:
+	case KIND_MUL:
+		             printf("*"); break;
+	case KIND_TRANS: printf("\'"); break;
+	case KIND_DIFF:  panic(ERROR_BAD_ARG); break;
+	}
 
 	if (node_is_inner) {}
 		if (arg1_print_parenthesis) printf("(");
@@ -982,6 +1049,7 @@ expr_derivative(ExprHandle handle) {
 	V { expr_print(res); expr_stat(res); }
 
 	// TODO: implement sorting.
+	// TODO: handle addition and multiplication by 0.
 	// TODO: constant folding.
 	res = expr_accumulate(res);
 
@@ -1061,12 +1129,15 @@ main(int argc, char const *argv[]) {
 	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
 	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
 	all_ok &= test_derivative("X:G", "G");
+	all_ok &= test_derivative("A", "0.I");
+	all_ok &= test_derivative("G:(10.I+X)", "G");
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
 	// terminal and HANDLE_NULL is a terminal that contains "error success".
 	// all_ok &= test_error("dX:dX");
 	// all_ok &= test_error("A:dX dX");
+	// TODO: test parse empty string.
 	{
 		const char *lhs_str = "A+(B+C)";
 		const char *rhs_str = "(A+B)+C";
