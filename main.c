@@ -1129,7 +1129,9 @@ main(int argc, char const *argv[]) {
 	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
 	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
 	all_ok &= test_derivative("X:G", "G");
+	all_ok &= test_derivative("X:10.I", "10.I");
 	all_ok &= test_derivative("A", "0.I");
+	all_ok &= test_derivative("A:G", "0.I");
 	all_ok &= test_derivative("G:(10.I+X)", "G");
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
