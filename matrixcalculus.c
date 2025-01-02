@@ -10,10 +10,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// C:\windows\system32\drivers\etc\hosts
+// $HOSTALIASES on macos and linux... hostname(7)
+// Absolute mad man: https://unix.stackexchange.com/a/57598
 int main() {
     int sockfd = -1;
     {
         // https://w3.cs.jmu.edu/kirkpams/OpenCSF/Books/csf/html/UDPSockets.html
+        // resolver(3)
         int err = 0;
         struct addrinfo
             hint = {
