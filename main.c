@@ -217,6 +217,65 @@ expr_is_valid(ExprHandle handle) {
 	return !expr_is_equal(handle, HANDLE_NULL);
 }
 
+static void
+expr_graphviz_internal(ExprHandle handle) {
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return;
+	}
+
+	{
+#define TRY_WRITE(c) do { label_buf[label_len++] = (c); } while (0)
+		int label_len = 0;
+		char label_buf[8] = {0};
+		CHECK_KIND(8);
+		switch (node->kind) {
+		case KIND_NULL:  TRY_WRITE('\0'); break;
+		// NOTE: We should allow only upper case letters
+		case KIND_VAR:   TRY_WRITE(node->name); break;
+		case KIND_CONST: {
+			uint8_t val = node->val;
+			char digits_buf[3] = {0}, *digits_ptr = digits_buf;
+			static_assert(UINT8_MAX == 255, "");
+			do {
+				*digits_ptr++ = val%(uint8_t)10 + (uint8_t)'0';
+			} while ((val /= (uint8_t)10));
+			while (digits_ptr-- != digits_buf) {
+				assert(digits_buf <= digits_ptr);
+				TRY_WRITE(*digits_ptr);
+			}
+			TRY_WRITE('.');
+			TRY_WRITE('I');
+		}; break;
+		case KIND_ADD:   TRY_WRITE('+'); break;
+		case KIND_MUL:   TRY_WRITE(' '); break;
+		case KIND_TRANS: TRY_WRITE('\''); break;
+		case KIND_DIFF:  TRY_WRITE('d'); break;
+		case KIND_INNER: TRY_WRITE(':'); break;
+		}
+		printf("\tn%05d [label=\"%s\"];\n", handle.value, label_buf);
+#undef TRY_WRITE
+	}
+	if (expr_is_valid(node->arg0)) {
+		printf("\tn%05d -> n%05d;\n", handle.value, node->arg0.value);
+		expr_graphviz_internal(node->arg0);
+	}
+	if (expr_is_valid(node->arg1)) {
+		printf("\tn%05d -> n%05d;\n", handle.value, node->arg1.value);
+		expr_graphviz_internal(node->arg1);
+	}
+}
+
+static void
+expr_graphviz(ExprHandle handle) {
+	bool ok = expr_write(handle, str_buf_arg0, sizeof str_buf_arg0);
+	assert(ok);
+	printf("digraph debuggraph {\n");
+	printf("\tlabel=\"%s\";\n", str_buf_arg0);
+	expr_graphviz_internal(handle);
+	printf("}\n");
+}
+
 // TODO: find a way to order commutative operators.
 // NOTE: This function can probably be implemented recursivelly (without doing
 // string comparisons) going down two tree like expr_write does but waiting for
@@ -268,6 +327,7 @@ expr_make_operator(Kind kind, ExprHandle arg0, ExprHandle arg1) {
 		&& kind != KIND_INNER) {
 		panic(ERROR_BAD_ARG);
 	}
+	if (!expr_is_valid(arg0)) panic(ERROR_BAD_ARG);
 	if (kind != KIND_TRANS && kind != KIND_DIFF) {
 		if (!expr_is_valid(arg1)) panic(ERROR_BAD_ARG);
 	} else {
@@ -880,7 +940,6 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
-// TODO: make this an str like funciton too.
 static void
 expr_print_matrixcalculus_internal(ExprHandle handle) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -953,76 +1012,137 @@ expr_get_with_count(ExprHandle handle, uint8_t *count) {
 }
 #endif
 
-static void
-traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count) {
+static ExprHandle
+expr_normalize_addend_internal(ExprHandle handle, uint8_t count[static 1]) {
 	ExprNodeRef node = expr_get_node(handle);
-	if (node->kind == KIND_NULL) {
-		return;
-	}
-	if (node->kind == KIND_ADD) traverse_test_internal(node->arg0, prev, count);
-	if (node->kind != KIND_ADD) {
-		if (expr_structural_equal(handle, *prev)) {
-			(*count)++;
+	ExprHandle lhs = HANDLE_NULL, rhs = HANDLE_NULL;
+
+	if (node->kind == KIND_MUL) lhs = expr_normalize_addend_internal(node->arg0, count);
+	if (node->kind != KIND_MUL) {
+		ExprHandle myhandle = handle;
+		ExprNodeRef mynode = node;
+		bool has_trans = node->kind == KIND_TRANS;
+		if (has_trans) myhandle = node->arg0, mynode = expr_get_node(myhandle);
+
+		assert(mynode->kind == KIND_CONST || mynode->kind == KIND_VAR);
+		if (mynode->kind == KIND_CONST) {
+			*count *= mynode->val;
+			return HANDLE_NULL;
 		} else {
-			if (expr_is_valid(*prev)) printf("append %d ", *count), expr_print(*prev);
-			*count = 1;
+			ExprHandle myhandlecopy = expr_copy(myhandle);
+			return has_trans
+				? expr_make_operator(KIND_TRANS, myhandlecopy, HANDLE_NULL)
+				: myhandlecopy;
 		}
-		// printf("count=%d ", *count);
-		expr_print(handle);
-		*prev = handle;
-		return;
 	}
-	if (node->kind == KIND_ADD) traverse_test_internal(node->arg1, prev, count);
+	if (node->kind == KIND_MUL) rhs = expr_normalize_addend_internal(node->arg1, count);
+
+	bool lhs_is_valid = expr_is_valid(lhs), rhs_is_valid = expr_is_valid(rhs);
+	if (!lhs_is_valid && !rhs_is_valid) return HANDLE_NULL;
+	if (!lhs_is_valid && rhs_is_valid)  return rhs;
+	if (lhs_is_valid  && !rhs_is_valid) return lhs;
+	if (lhs_is_valid  && rhs_is_valid)  return expr_make_operator(KIND_MUL, lhs, rhs);
+	assert(false);
+}
+
+static ExprHandle
+expr_with_count(ExprHandle handle, uint8_t count) {
+	// NOTE: here I could return expr_make_operand(KIND_CONST, 0) when count == 0
+	// and HANDLE_NULL when handle is HANDLE_NULL.
+	return count > 1
+		? expr_make_operator(KIND_MUL,
+			expr_make_operand(KIND_CONST, count),
+			handle)
+		: handle;
 }
 
 static void
-traverse_test(ExprHandle handle) {
-	ExprHandle prev = HANDLE_NULL;
-	uint8_t count = 1;
-	traverse_test_internal(handle, &prev, &count);
-	if (expr_is_valid(prev)) printf("append %d ", count), expr_print(prev);
-}
-// FIXME: this implementation is wrong because it traverses the tree in the
-// wrong order!
-static ExprHandle
-expr_accumulate_internal(ExprHandle handle) {
-	traverse_test(handle);
-	return handle;
-#if 0 /************************************************************************/
+traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
+	ExprHandle *append) {
 	ExprNodeRef node = expr_get_node(handle);
-	if (node->kind == KIND_NULL) {
+
+	if (node->kind == KIND_ADD) traverse_test_internal(node->arg0, prev, count, append);
+	if (node->kind != KIND_ADD) {
+		assert(node->kind == KIND_INNER);
+		uint8_t addend_count = 1;
+		ExprHandle normalized_handle = expr_normalize_addend_internal(node->arg0, &addend_count);
+		if (addend_count == 0) {
+			// *count = 0;
+			return;
+		}
+		if (!expr_is_valid(normalized_handle)) {
+			normalized_handle = expr_make_operand(KIND_CONST, addend_count);
+		}
+		ExprHandle new_handle = expr_make_operator(KIND_INNER,
+			normalized_handle,
+			expr_copy(node->arg1)
+		);
+
+		if (expr_structural_equal(new_handle, *prev)) {
+			*count += addend_count;
+		} else { // append with count
+			if (expr_is_valid(*prev)) {
+				if (expr_is_valid(*append)) {
+					*append = expr_make_operator(KIND_ADD,
+						*append,
+						expr_with_count(*prev, *count)
+					);
+				} else {
+					*append = expr_with_count(*prev, *count);
+				}
+			}
+			*count = addend_count;
+		}
+		*prev = new_handle;
+		return;
+	}
+	if (node->kind == KIND_ADD) traverse_test_internal(node->arg1, prev, count, append);
+}
+
+static ExprHandle
+traverse_test(ExprHandle handle) {
+	printf("handle: "), expr_print(handle);
+	if (!expr_is_valid(handle)) {
 		return HANDLE_NULL;
 	}
-	if (node->kind == KIND_VAR || node->kind == KIND_CONST) {
-		return expr_copy(handle);
-	}
-
-	// Here lower case are identity matrices multiplied by a constant.
-	// n X+m X = X n+m X = n X+X m = X n+X m = (n+m) X
-	// n X m X = X n m X = n X X m = X n X m = (n m) X
-	if (node->kind == KIND_ADD || node->kind == KIND_ADD) {
-		uint8_t arg0_count = 0;
-		ExprHandle arg0 = expr_get_with_count(node->arg0, &arg0_count);
-		uint8_t arg1_count = 0;
-		ExprHandle arg1 = expr_get_with_count(node->arg1, &arg0_count);
-		if (expr_structural_equal(arg0, arg1)) {
-			uint8_t res_count = node->kind == KIND_ADD
-				? arg0_count+arg1_count
-				: arg0_count*arg1_count;
-			return expr_make_operator(KIND_MUL,
-				expr_make_operator(KIND_CONST, res_count),
-				expr_copy(arg0)
+	// TODO: add the count to the last element of the left argument of the inner
+	// product.
+	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
+	uint8_t count = 1;
+	traverse_test_internal(handle, &prev, &count, &res);
+	if (expr_is_valid(res)) {
+		assert(expr_is_valid(prev));
+		res = expr_make_operator(KIND_ADD,
+			res,
+			expr_with_count(prev, count)
+		);
+	} else {
+		if (expr_is_valid(prev))
+			res = expr_with_count(prev, count);
+		else
+			res = expr_make_operator(KIND_INNER,
+				expr_make_operand(KIND_CONST, 0),
+				expr_make_operator(KIND_DIFF,
+					expr_make_operand(KIND_VAR, diff_var_name),
+					HANDLE_NULL
+				)
 			);
-		}
 	}
+	// FIXME: la routine di factoring non è invariante alla parentesizzazione.
+	// TODO: mettere expr_graphviz nel repl di debug...
+	expr_graphviz(handle);
+	expr_graphviz(res);
+	printf("res:    "), expr_print(res);
+	return res;
+}
 
-	return expr_make_operator(node->kind, node->arg0, node->arg1);
-#endif /***********************************************************************/
+static ExprHandle
+expr_accumulate_internal(ExprHandle handle) {
+	return traverse_test(handle);
 }
 
 static ExprHandle
 expr_accumulate(ExprHandle handle) {
-	// TODO: this operation has to be done ad nauseam.
 	return expr_accumulate_internal(handle);
 }
 
@@ -1030,6 +1150,7 @@ static ExprHandle
 expr_derivative(ExprHandle handle) {
 	ExprHandle res = handle;
 #define V if (trace_execution)
+	// TODO: inline some of the functions here...
 
 	V printf("Steps for the derivation of\n");
 	V expr_print(res);
@@ -1049,12 +1170,11 @@ expr_derivative(ExprHandle handle) {
 	V { expr_print(res); expr_stat(res); }
 
 	// TODO: implement sorting.
-	// TODO: handle addition and multiplication by 0.
-	// TODO: constant folding.
+
+	res = expr_distr(res);
 	res = expr_accumulate(res);
 
 	V printf("Step 4. Factorization.\n");
-	res = expr_distr(res);
 	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
 
@@ -1125,6 +1245,7 @@ main(int argc, char const *argv[]) {
 	return 0;
 #elif defined(TEST)
 	trace_execution = false;
+	// TODO: we should use an int instead to count the number of errors.
 	bool all_ok = true;
 	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
 	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
@@ -1132,6 +1253,7 @@ main(int argc, char const *argv[]) {
 	all_ok &= test_derivative("X:10.I", "10.I");
 	all_ok &= test_derivative("A", "0.I");
 	all_ok &= test_derivative("A:G", "0.I");
+	all_ok &= test_derivative("A:G+A:G", "0.I");
 	all_ok &= test_derivative("G:(10.I+X)", "G");
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
@@ -1139,7 +1261,9 @@ main(int argc, char const *argv[]) {
 	// terminal and HANDLE_NULL is a terminal that contains "error success".
 	// all_ok &= test_error("dX:dX");
 	// all_ok &= test_error("A:dX dX");
-	// TODO: test parse empty string.
+	// TODO: test parse empty string
+	// all_ok &= test_structural_equal("", "");
+	// all_ok &= test_structural_equal("A+(B+C)", "(A+B)+C");
 	{
 		const char *lhs_str = "A+(B+C)";
 		const char *rhs_str = "(A+B)+C";
@@ -1151,6 +1275,7 @@ main(int argc, char const *argv[]) {
 		}
 		all_ok &= ok;
 	}
+	// TODO: test that this holds !expr_is_valid(expr_derivative(HANDLE_NULL))
 	if (all_ok) {
 		printf("OK!\n");
 		return 0;
@@ -1163,15 +1288,20 @@ main(int argc, char const *argv[]) {
 	// due espressioni sintatticamente diverse!
 	// tr(G'*(X+6*inv(I)*I)*(X-5*inv(I)*I))
 	// tr(G'*(X*X + 6*inv(I)*I*X - X*5*inv(I)*I - 30*inv(I)*I))
-	// Unaltro caso:
+	// Un altro caso:
 	// tr(G'*((C+X)*G*E*F+G*E*F*(X+B))')
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
 
-	traverse_test(expr_parse("(A C+B A)+(B A+B A)+B+B"));
-	return 0;
+	// traverse_test(expr_parse("(A C:dX+B A:dX)+(B A:dX+B A:dX)+B:dX+B:dX"));
+	ExprHandle e = expr_parse(
+		"A 5.I B':dX+(A B' 6.I':dX+C 0.I G:dX)+3.I A' 2.I:dX+3.I 4.I W:dX+2.I' 3.I:dX"
+	);
+	expr_print(e);
+	traverse_test(e);
+	// return 0;
 
-	trace_execution = true;
+	// trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
 	// FIXME: Since we can't factor for constants we can't find the derivarive
 	// of the following two functions.
@@ -1179,7 +1309,7 @@ main(int argc, char const *argv[]) {
 	res = expr_parse("G:(A X+A X)"); expr_print(res); expr_stat(res);
 	// res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
 	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
-	res = expr_derivative(res);
+	res = expr_derivative(res); expr_print(res);
 	return 0;
 #endif
 }
