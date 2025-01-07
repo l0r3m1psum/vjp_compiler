@@ -644,6 +644,9 @@ expr_normalize_addend_internal(ExprHandle handle, uint8_t *count) {
 	if (lhs_is_valid  && !rhs_is_valid) return lhs;
 	if (lhs_is_valid  && rhs_is_valid)  return expr_make_operator(KIND_MUL, lhs, rhs);
 	assert(false);
+#if defined(_WIN64)
+	__assume(0);
+#endif
 }
 
 static ExprHandle
@@ -942,6 +945,7 @@ Grammar_primary(ParserState *state) {
 static ExprHandle
 expr_parse(const char *expr) {
 	ParserState state = {.tokens = expr, .lentgh = strlen(expr)};
+	if (*expr == '\0') return HANDLE_NULL;
 	return Grammar_term(&state);
 }
 
@@ -1099,13 +1103,15 @@ expr_print_matrixcalculus(ExprHandle handle) {
 
 static ExprHandle
 expr_derivative(ExprHandle handle) {
+	if (!expr_is_valid(handle)) return HANDLE_NULL;
 	ExprHandle res = handle;
 #define V if (trace_execution)
 	// TODO: inline some of the functions here...
 
 	V printf("Steps for the derivation of\n");
 	V expr_print(res);
-	V printf("Equivalent expression to check result on https://www.matrixcalculus.org\n");
+	V printf("Equivalent expression to check result on "
+		"https://www.matrixcalculus.org\n");
 	V expr_print_matrixcalculus(res);
 
 	V printf("Step 1. Differential application;\n");
@@ -1147,8 +1153,7 @@ test_derivative(const char *expr, const char *res) {
 	ExprHandle rhs = expr_parse(res);
 	bool ok = expr_structural_equal(lhs, rhs);
 	if (!ok) {
-		printf("Derivative of %s is not %s but is\n", expr, res);
-		expr_print(lhs);
+		printf("Derivative of %s is not %s but is ", expr, res), expr_print(lhs);
 	}
 	return ok;
 }
@@ -1196,7 +1201,7 @@ main(int argc, char const *argv[]) {
 		"(A 5.I B'+(A B' 6.I'+C 0.I G)+3.I A' 2.I+3.I 4.I W+2.I' 3.I):X",
 		"11.I A B'+6.I A'+12.I W+6.I");
 	num_bad += !test_derivative("((A C+B A)+(B A+B A)+B+B):X", "A C+3.I B A+2.I B");
-	// num_bad += !test_derivative("", ""); // TODO: test parse empty string
+	num_bad += !test_derivative("", ""); // TODO: test parse empty string
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
