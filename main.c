@@ -989,31 +989,8 @@ expr_print_matrixcalculus(ExprHandle handle) {
 	printf("\n");
 }
 
-#if 0
 static ExprHandle
-expr_get_with_count(ExprHandle handle, uint8_t *count) {
-	ExprNodeRef node = expr_get_node(handle);
-	uint8_t res_count = 1;
-	ExprHandle res_handle = handle;
-	if (node->kind == KIND_MUL) {
-		ExprNodeRef arg0_node = expr_get_node(node->arg0);
-		ExprNodeRef arg1_node = expr_get_node(node->arg1);
-		if (arg0_node->kind == KIND_CONST) {
-			res_count = arg0_node->val;
-			res_handle = arg0_node->arg0;
-		}
-		if (arg1_node->kind == KIND_CONST) {
-			res_count = arg1_node->val;
-			res_handle = arg1_node->arg0;
-		}
-	}
-	// NOTE: Should I return 0 for KIND_NULL?
-	return *count = res_count, res_handle;
-}
-#endif
-
-static ExprHandle
-expr_normalize_addend_internal(ExprHandle handle, uint8_t count[static 1]) {
+expr_normalize_addend_internal(ExprHandle handle, uint8_t *count) {
 	ExprNodeRef node = expr_get_node(handle);
 	ExprHandle lhs = HANDLE_NULL, rhs = HANDLE_NULL;
 
@@ -1057,11 +1034,11 @@ expr_with_count(ExprHandle handle, uint8_t count) {
 }
 
 static void
-traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
+expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
 	ExprHandle *append) {
 	ExprNodeRef node = expr_get_node(handle);
 
-	if (node->kind == KIND_ADD) traverse_test_internal(node->arg0, prev, count, append);
+	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg0, prev, count, append);
 	if (node->kind != KIND_ADD) {
 		assert(node->kind == KIND_INNER);
 		uint8_t addend_count = 1;
@@ -1096,11 +1073,11 @@ traverse_test_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
 		*prev = new_handle;
 		return;
 	}
-	if (node->kind == KIND_ADD) traverse_test_internal(node->arg1, prev, count, append);
+	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg1, prev, count, append);
 }
 
 static ExprHandle
-traverse_test(ExprHandle handle) {
+expr_accumulate(ExprHandle handle) {
 	printf("handle: "), expr_print(handle);
 	if (!expr_is_valid(handle)) {
 		return HANDLE_NULL;
@@ -1109,7 +1086,7 @@ traverse_test(ExprHandle handle) {
 	// product.
 	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
 	uint8_t count = 1;
-	traverse_test_internal(handle, &prev, &count, &res);
+	expr_accumulate_internal(handle, &prev, &count, &res);
 	if (expr_is_valid(res)) {
 		assert(expr_is_valid(prev));
 		res = expr_make_operator(KIND_ADD,
@@ -1134,16 +1111,6 @@ traverse_test(ExprHandle handle) {
 	expr_graphviz(res);
 	printf("res:    "), expr_print(res);
 	return res;
-}
-
-static ExprHandle
-expr_accumulate_internal(ExprHandle handle) {
-	return traverse_test(handle);
-}
-
-static ExprHandle
-expr_accumulate(ExprHandle handle) {
-	return expr_accumulate_internal(handle);
 }
 
 static ExprHandle
@@ -1293,12 +1260,12 @@ main(int argc, char const *argv[]) {
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
 
-	// traverse_test(expr_parse("(A C:dX+B A:dX)+(B A:dX+B A:dX)+B:dX+B:dX"));
+	// expr_accumulate(expr_parse("(A C:dX+B A:dX)+(B A:dX+B A:dX)+B:dX+B:dX"));
 	ExprHandle e = expr_parse(
 		"A 5.I B':dX+(A B' 6.I':dX+C 0.I G:dX)+3.I A' 2.I:dX+3.I 4.I W:dX+2.I' 3.I:dX"
 	);
 	expr_print(e);
-	traverse_test(e);
+	expr_accumulate(e);
 	// return 0;
 
 	// trace_execution = true;
