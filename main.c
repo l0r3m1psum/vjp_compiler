@@ -1181,27 +1181,29 @@ main(int argc, char const *argv[]) {
 	return 0;
 #elif defined(TEST)
 	trace_execution = false;
-	// TODO: we should use an int instead to count the number of errors.
-	bool all_ok = true;
-	all_ok &= test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
-	all_ok &= test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
-	all_ok &= test_derivative("X:G", "G");
-	all_ok &= test_derivative("X:10.I", "10.I");
-	all_ok &= test_derivative("A", "0.I");
-	all_ok &= test_derivative("A:G", "0.I");
-	all_ok &= test_derivative("A:G+A:G", "0.I");
-	all_ok &= test_derivative("G:(10.I+X)", "G");
-	all_ok &= test_derivative("G:(X+X)", "2.I G");
-	all_ok &= test_derivative("G:(A X+A X)", "2.I A G");
+	int num_bad = 0;
+	num_bad += !test_derivative("G:(E F (X+B) (C+X))'", "((C+X) G E F+G E F (X+B))'");
+	num_bad += !test_derivative("G:(X B+C (X D))", "(G B'+C' G D')");
+	num_bad += !test_derivative("X:G", "G");
+	num_bad += !test_derivative("X:10.I", "10.I");
+	num_bad += !test_derivative("A", "0.I");
+	num_bad += !test_derivative("A:G", "0.I");
+	num_bad += !test_derivative("A:G+A:G", "0.I");
+	num_bad += !test_derivative("G:(10.I+X)", "G");
+	num_bad += !test_derivative("G:(X+X)", "2.I G");
+	num_bad += !test_derivative("G:(A X+A X)", "2.I A G");
+	num_bad += !test_derivative(
+		"(A 5.I B'+(A B' 6.I'+C 0.I G)+3.I A' 2.I+3.I 4.I W+2.I' 3.I):X",
+		"11.I A B'+6.I A'+12.I W+6.I");
+	num_bad += !test_derivative("((A C+B A)+(B A+B A)+B+B):X", "A C+3.I B A+2.I B");
+	// num_bad += !test_derivative("", ""); // TODO: test parse empty string
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
 	// terminal and HANDLE_NULL is a terminal that contains "error success".
-	// all_ok &= test_error("dX:dX");
-	// all_ok &= test_error("A:dX dX");
-	// TODO: test parse empty string
-	// all_ok &= test_structural_equal("", "");
-	// all_ok &= test_structural_equal("A+(B+C)", "(A+B)+C");
+	// num_bad += !test_error("dX:dX");
+	// num_bad += !test_error("A:dX dX");
+	// num_bad += !test_structural_equal("A+(B+C)", "(A+B)+C");
 	{
 		const char *lhs_str = "A+(B+C)";
 		const char *rhs_str = "(A+B)+C";
@@ -1211,16 +1213,14 @@ main(int argc, char const *argv[]) {
 		if (!ok) {
 			printf("%s is not structurally equal to %s\n", lhs_str, rhs_str);
 		}
-		all_ok &= ok;
+		num_bad += !ok;
 	}
-	// TODO: test that this holds !expr_is_valid(expr_derivative(HANDLE_NULL))
-	if (all_ok) {
+	if (!num_bad) {
 		printf("OK!\n");
-		return 0;
 	}
-	return 1;
+	return num_bad;
 #else
-	// printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
+	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
 
 	// Queste due espressioni sono equivalenti ma www.matrixcalculus.org ritorna
 	// due espressioni sintatticamente diverse!
@@ -1231,17 +1231,6 @@ main(int argc, char const *argv[]) {
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
 
-	// expr_accumulate(expr_parse("(A C:dX+B A:dX)+(B A:dX+B A:dX)+B:dX+B:dX"));
-	ExprHandle e = expr_parse(
-		"A 5.I B'+(A B' 6.I'+C 0.I G)+3.I A' 2.I+3.I 4.I W+2.I' 3.I"
-	);
-	e = expr_accumulate(e);
-	expr_print(e);
-
-	// trace_execution = true;
-	ExprHandle res = HANDLE_NULL;
-	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
-	// res = expr_derivative(res); expr_print(res);
 	return 0;
 #endif
 }
