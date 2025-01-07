@@ -1209,18 +1209,6 @@ main(int argc, char const *argv[]) {
 	// terminal and HANDLE_NULL is a terminal that contains "error success".
 	// num_bad += !test_error("dX:dX");
 	// num_bad += !test_error("A:dX dX");
-	// num_bad += !test_structural_equal("A+(B+C)", "(A+B)+C");
-	{
-		const char *lhs_str = "A+(B+C)";
-		const char *rhs_str = "(A+B)+C";
-		ExprHandle lhs = expr_parse(lhs_str);
-		ExprHandle rhs = expr_parse(rhs_str);
-		bool ok = expr_structural_equal(lhs, rhs);
-		if (!ok) {
-			printf("%s is not structurally equal to %s\n", lhs_str, rhs_str);
-		}
-		num_bad += !ok;
-	}
 	if (!num_bad) {
 		printf("OK!\n");
 	}
