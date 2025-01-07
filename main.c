@@ -214,67 +214,7 @@ expr_is_equal(ExprHandle arg0, ExprHandle arg1) {
 
 static bool
 expr_is_valid(ExprHandle handle) {
-	return !expr_is_equal(handle, HANDLE_NULL);
-}
-
-static void
-expr_graphviz_internal(ExprHandle handle) {
-	ExprNodeRef node = expr_get_node(handle);
-	if (node->kind == KIND_NULL) {
-		return;
-	}
-
-	{
-#define TRY_WRITE(c) do { label_buf[label_len++] = (c); } while (0)
-		int label_len = 0;
-		char label_buf[8] = {0};
-		CHECK_KIND(8);
-		switch (node->kind) {
-		case KIND_NULL:  TRY_WRITE('\0'); break;
-		// NOTE: We should allow only upper case letters
-		case KIND_VAR:   TRY_WRITE(node->name); break;
-		case KIND_CONST: {
-			uint8_t val = node->val;
-			char digits_buf[3] = {0}, *digits_ptr = digits_buf;
-			static_assert(UINT8_MAX == 255, "");
-			do {
-				*digits_ptr++ = val%(uint8_t)10 + (uint8_t)'0';
-			} while ((val /= (uint8_t)10));
-			while (digits_ptr-- != digits_buf) {
-				assert(digits_buf <= digits_ptr);
-				TRY_WRITE(*digits_ptr);
-			}
-			TRY_WRITE('.');
-			TRY_WRITE('I');
-		}; break;
-		case KIND_ADD:   TRY_WRITE('+'); break;
-		case KIND_MUL:   TRY_WRITE(' '); break;
-		case KIND_TRANS: TRY_WRITE('\''); break;
-		case KIND_DIFF:  TRY_WRITE('d'); break;
-		case KIND_INNER: TRY_WRITE(':'); break;
-		}
-		printf("\tn%05d [label=\"%s\"];\n", handle.value, label_buf);
-#undef TRY_WRITE
-	}
-	if (expr_is_valid(node->arg0)) {
-		printf("\tn%05d -> n%05d;\n", handle.value, node->arg0.value);
-		expr_graphviz_internal(node->arg0);
-	}
-	if (expr_is_valid(node->arg1)) {
-		printf("\tn%05d -> n%05d;\n", handle.value, node->arg1.value);
-		expr_graphviz_internal(node->arg1);
-	}
-}
-
-// https://forum.graphviz.org/t/binary-tree-force-lonely-node-to-be-left-or-right/1159
-static void
-expr_graphviz(ExprHandle handle) {
-	bool ok = expr_write(handle, str_buf_arg0, sizeof str_buf_arg0);
-	assert(ok);
-	printf("digraph debuggraph {\n");
-	printf("\tlabel=\"%s\";\n", str_buf_arg0);
-	expr_graphviz_internal(handle);
-	printf("}\n");
+	return handle.value != HANDLE_NULL.value;
 }
 
 // TODO: find a way to order commutative operators.
@@ -469,7 +409,7 @@ expr_distr_internal(ExprHandle handle, bool *changed) {
 		return HANDLE_NULL;
 	}
 
-	// Transpose interact with the inner product and the constanta in the
+	// Transpose interact with the inner product and the constant in the
 	// following ways
 	// (A:B)' => A:B
 	// A':B'  => A:B
@@ -586,45 +526,6 @@ expr_distr(ExprHandle handle) {
 	return res;
 }
 
-static void
-expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
-	ExprNodeRef node = expr_get_node(handle);
-	CHECK_KIND(8);
-	switch (node->kind) {
-	case KIND_NULL:
-		break;
-	case KIND_CONST:
-	case KIND_VAR:
-		(*operand_count)++;
-		break;
-	case KIND_MUL:
-	case KIND_ADD:
-	case KIND_INNER:
-		expr_stat_internal(node->arg0, operator_count, operand_count);
-		expr_stat_internal(node->arg1, operator_count, operand_count);
-		(*operator_count)++;
-		break;
-	case KIND_TRANS:
-		expr_stat_internal(node->arg0, operator_count, operand_count);
-		(*operator_count)++;
-		break;
-	case KIND_DIFF:
-		expr_stat_internal(node->arg1, operator_count, operand_count);
-		(*operator_count)++;
-		break;
-	}
-	// TODO: duplicated count? This requires a hash table.
-	return;
-}
-
-static void
-expr_stat(ExprHandle handle) {
-	uint16_t operator_count = 0, operand_count = 0;
-	expr_stat_internal(handle, &operator_count, &operand_count);
-	uint32_t sum = operator_count + operand_count;
-	printf("#operand=%d #operator=%d sum=%d\n", operand_count, operator_count, sum);
-}
-
 // TODO: to avoid having to remember which unary operations have the argument on
 // the left or the right a expr_single_child function could be handy to avoid
 // trivial mistakes.
@@ -703,11 +604,6 @@ expr_expose_differentials(ExprHandle handle) {
 		assert(arg1_node->kind == KIND_DIFF);
 		if (expr_get_node(arg1_node->arg1)->name != diff_var_name)
 			panic(ERROR_BAD_DATA);
-#if 0
-		ExprHandle new_arg1 = expr_copy(arg1);
-		// A:dX
-		return expr_make_operator(KIND_INNER, A, new_arg1);
-#endif
 		return A;
 	}
 
@@ -715,6 +611,109 @@ panic:
 	// The expression needs to be in "distributed normal form" and contain a
 	// differentiated variable in each inner product.
 	panic(ERROR_BAD_DATA);
+}
+
+static ExprHandle
+expr_normalize_addend_internal(ExprHandle handle, uint8_t *count) {
+	ExprNodeRef node = expr_get_node(handle);
+	ExprHandle lhs = HANDLE_NULL, rhs = HANDLE_NULL;
+
+	if (node->kind == KIND_MUL) lhs = expr_normalize_addend_internal(node->arg0, count);
+	if (node->kind != KIND_MUL) {
+		ExprHandle myhandle = handle;
+		ExprNodeRef mynode = node;
+		bool has_trans = node->kind == KIND_TRANS;
+		if (has_trans) myhandle = node->arg0, mynode = expr_get_node(myhandle);
+
+		assert(mynode->kind == KIND_CONST || mynode->kind == KIND_VAR);
+		if (mynode->kind == KIND_CONST) {
+			*count *= mynode->val;
+			return HANDLE_NULL;
+		} else {
+			ExprHandle myhandlecopy = expr_copy(myhandle);
+			return has_trans
+				? expr_make_operator(KIND_TRANS, myhandlecopy, HANDLE_NULL)
+				: myhandlecopy;
+		}
+	}
+	if (node->kind == KIND_MUL) rhs = expr_normalize_addend_internal(node->arg1, count);
+
+	bool lhs_is_valid = expr_is_valid(lhs), rhs_is_valid = expr_is_valid(rhs);
+	if (!lhs_is_valid && !rhs_is_valid) return HANDLE_NULL;
+	if (!lhs_is_valid && rhs_is_valid)  return rhs;
+	if (lhs_is_valid  && !rhs_is_valid) return lhs;
+	if (lhs_is_valid  && rhs_is_valid)  return expr_make_operator(KIND_MUL, lhs, rhs);
+	assert(false);
+}
+
+static ExprHandle
+expr_with_count(ExprHandle handle, uint8_t count) {
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_CONST) return expr_copy(handle);
+	if (count == 0 || node->kind == KIND_NULL) return expr_make_operand(KIND_CONST, 0);
+	return count > 1
+		? expr_make_operator(KIND_MUL,
+			expr_make_operand(KIND_CONST, count),
+			handle)
+		: handle;
+}
+
+static void
+expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
+	ExprHandle *append) {
+	ExprNodeRef node = expr_get_node(handle);
+
+	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg0, prev, count, append);
+	if (node->kind != KIND_ADD) {
+		uint8_t addend_count = 1;
+		ExprHandle normalized_handle = expr_normalize_addend_internal(handle, &addend_count);
+		if (addend_count == 0) {
+			return;
+		}
+		if (!expr_is_valid(normalized_handle)) {
+			normalized_handle = expr_make_operand(KIND_CONST, addend_count);
+		}
+		ExprHandle new_handle = normalized_handle;
+
+		if (expr_structural_equal(new_handle, *prev)) {
+			*count += addend_count;
+		} else { // append with count
+			if (expr_is_valid(*prev)) {
+				if (expr_is_valid(*append)) {
+					*append = expr_make_operator(KIND_ADD,
+						*append,
+						expr_with_count(*prev, *count)
+					);
+				} else {
+					*append = expr_with_count(*prev, *count);
+				}
+			}
+			*count = addend_count;
+		}
+		*prev = new_handle;
+		return;
+	}
+	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg1, prev, count, append);
+}
+
+static ExprHandle
+expr_accumulate(ExprHandle handle) {
+	if (!expr_is_valid(handle)) {
+		return HANDLE_NULL;
+	}
+	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
+	uint8_t count = 1;
+	expr_accumulate_internal(handle, &prev, &count, &res);
+	if (expr_is_valid(res)) {
+		assert(expr_is_valid(prev));
+		res = expr_make_operator(KIND_ADD,
+			res,
+			expr_with_count(prev, count)
+		);
+	} else {
+		res = expr_with_count(prev, count);
+	}
+	return res;
 }
 
 static ExprHandle
@@ -805,6 +804,8 @@ expr_factor(ExprHandle handle) {
 	}
 	return res;
 }
+
+/* Parser *********************************************************************/
 
 typedef struct ParserState {
 	const char *tokens;
@@ -944,6 +945,107 @@ expr_parse(const char *expr) {
 	return Grammar_term(&state);
 }
 
+/* Debug **********************************************************************/
+
+static void
+expr_graphviz_internal(ExprHandle handle) {
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_NULL) {
+		return;
+	}
+
+	{
+#define TRY_WRITE(c) do { label_buf[label_len++] = (c); } while (0)
+		int label_len = 0;
+		char label_buf[8] = {0};
+		CHECK_KIND(8);
+		switch (node->kind) {
+		case KIND_NULL:  TRY_WRITE('\0'); break;
+		// NOTE: We should allow only upper case letters
+		case KIND_VAR:   TRY_WRITE(node->name); break;
+		case KIND_CONST: {
+			uint8_t val = node->val;
+			char digits_buf[3] = {0}, *digits_ptr = digits_buf;
+			static_assert(UINT8_MAX == 255, "");
+			do {
+				*digits_ptr++ = val%(uint8_t)10 + (uint8_t)'0';
+			} while ((val /= (uint8_t)10));
+			while (digits_ptr-- != digits_buf) {
+				assert(digits_buf <= digits_ptr);
+				TRY_WRITE(*digits_ptr);
+			}
+			TRY_WRITE('.');
+			TRY_WRITE('I');
+		}; break;
+		case KIND_ADD:   TRY_WRITE('+'); break;
+		case KIND_MUL:   TRY_WRITE(' '); break;
+		case KIND_TRANS: TRY_WRITE('\''); break;
+		case KIND_DIFF:  TRY_WRITE('d'); break;
+		case KIND_INNER: TRY_WRITE(':'); break;
+		}
+		printf("\tn%05d [label=\"%s\"];\n", handle.value, label_buf);
+#undef TRY_WRITE
+	}
+	if (expr_is_valid(node->arg0)) {
+		printf("\tn%05d -> n%05d;\n", handle.value, node->arg0.value);
+		expr_graphviz_internal(node->arg0);
+	}
+	if (expr_is_valid(node->arg1)) {
+		printf("\tn%05d -> n%05d;\n", handle.value, node->arg1.value);
+		expr_graphviz_internal(node->arg1);
+	}
+}
+
+// https://forum.graphviz.org/t/binary-tree-force-lonely-node-to-be-left-or-right/1159
+static void
+expr_graphviz(ExprHandle handle) {
+	bool ok = expr_write(handle, str_buf_arg0, sizeof str_buf_arg0);
+	assert(ok);
+	printf("digraph debuggraph {\n");
+	printf("\tlabel=\"%s\";\n", str_buf_arg0);
+	expr_graphviz_internal(handle);
+	printf("}\n");
+}
+
+static void
+expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
+	ExprNodeRef node = expr_get_node(handle);
+	CHECK_KIND(8);
+	switch (node->kind) {
+	case KIND_NULL:
+		break;
+	case KIND_CONST:
+	case KIND_VAR:
+		(*operand_count)++;
+		break;
+	case KIND_MUL:
+	case KIND_ADD:
+	case KIND_INNER:
+		expr_stat_internal(node->arg0, operator_count, operand_count);
+		expr_stat_internal(node->arg1, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	case KIND_TRANS:
+		expr_stat_internal(node->arg0, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	case KIND_DIFF:
+		expr_stat_internal(node->arg1, operator_count, operand_count);
+		(*operator_count)++;
+		break;
+	}
+	// TODO: duplicated count? This requires a hash table.
+	return;
+}
+
+static void
+expr_stat(ExprHandle handle) {
+	uint16_t operator_count = 0, operand_count = 0;
+	expr_stat_internal(handle, &operator_count, &operand_count);
+	uint32_t sum = operator_count + operand_count;
+	printf("#operand=%d #operator=%d sum=%d\n", operand_count, operator_count, sum);
+}
+
 static void
 expr_print_matrixcalculus_internal(ExprHandle handle) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -993,116 +1095,7 @@ expr_print_matrixcalculus(ExprHandle handle) {
 	printf("\n");
 }
 
-static ExprHandle
-expr_normalize_addend_internal(ExprHandle handle, uint8_t *count) {
-	ExprNodeRef node = expr_get_node(handle);
-	ExprHandle lhs = HANDLE_NULL, rhs = HANDLE_NULL;
-
-	if (node->kind == KIND_MUL) lhs = expr_normalize_addend_internal(node->arg0, count);
-	if (node->kind != KIND_MUL) {
-		ExprHandle myhandle = handle;
-		ExprNodeRef mynode = node;
-		bool has_trans = node->kind == KIND_TRANS;
-		if (has_trans) myhandle = node->arg0, mynode = expr_get_node(myhandle);
-
-		assert(mynode->kind == KIND_CONST || mynode->kind == KIND_VAR);
-		if (mynode->kind == KIND_CONST) {
-			*count *= mynode->val;
-			return HANDLE_NULL;
-		} else {
-			ExprHandle myhandlecopy = expr_copy(myhandle);
-			return has_trans
-				? expr_make_operator(KIND_TRANS, myhandlecopy, HANDLE_NULL)
-				: myhandlecopy;
-		}
-	}
-	if (node->kind == KIND_MUL) rhs = expr_normalize_addend_internal(node->arg1, count);
-
-	bool lhs_is_valid = expr_is_valid(lhs), rhs_is_valid = expr_is_valid(rhs);
-	if (!lhs_is_valid && !rhs_is_valid) return HANDLE_NULL;
-	if (!lhs_is_valid && rhs_is_valid)  return rhs;
-	if (lhs_is_valid  && !rhs_is_valid) return lhs;
-	if (lhs_is_valid  && rhs_is_valid)  return expr_make_operator(KIND_MUL, lhs, rhs);
-	assert(false);
-}
-
-static ExprHandle
-expr_with_count(ExprHandle handle, uint8_t count) {
-	// NOTE: here I could return expr_make_operand(KIND_CONST, 0) when count == 0
-	// and HANDLE_NULL when handle is HANDLE_NULL.
-	ExprNodeRef node = expr_get_node(handle);
-	if (node->kind == KIND_CONST) return expr_copy(handle);
-	if (count == 0) return expr_make_operand(KIND_CONST, 0);
-	return count > 1
-		? expr_make_operator(KIND_MUL,
-			expr_make_operand(KIND_CONST, count),
-			handle)
-		: handle;
-}
-
-static void
-expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
-	ExprHandle *append) {
-	ExprNodeRef node = expr_get_node(handle);
-
-	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg0, prev, count, append);
-	if (node->kind != KIND_ADD) {
-#if 0
-		assert(node->kind == KIND_INNER);
-#endif
-		uint8_t addend_count = 1;
-		ExprHandle normalized_handle = expr_normalize_addend_internal(handle, &addend_count);
-		if (addend_count == 0) {
-			return;
-		}
-		if (!expr_is_valid(normalized_handle)) {
-			normalized_handle = expr_make_operand(KIND_CONST, addend_count);
-		}
-		ExprHandle new_handle = normalized_handle;
-
-		if (expr_structural_equal(new_handle, *prev)) {
-			*count += addend_count;
-		} else { // append with count
-			if (expr_is_valid(*prev)) {
-				if (expr_is_valid(*append)) {
-					*append = expr_make_operator(KIND_ADD,
-						*append,
-						expr_with_count(*prev, *count)
-					);
-				} else {
-					*append = expr_with_count(*prev, *count);
-				}
-			}
-			*count = addend_count;
-		}
-		*prev = new_handle;
-		return;
-	}
-	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg1, prev, count, append);
-}
-
-static ExprHandle
-expr_accumulate(ExprHandle handle) {
-	if (!expr_is_valid(handle)) {
-		return HANDLE_NULL;
-	}
-	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
-	uint8_t count = 1;
-	expr_accumulate_internal(handle, &prev, &count, &res);
-	if (expr_is_valid(res)) {
-		assert(expr_is_valid(prev));
-		res = expr_make_operator(KIND_ADD,
-			res,
-			expr_with_count(prev, count)
-		);
-	} else {
-		if (expr_is_valid(prev))
-			res = expr_with_count(prev, count);
-		else
-			res = expr_make_operand(KIND_CONST, 0);
-	}
-	return res;
-}
+/******************************************************************************/
 
 static ExprHandle
 expr_derivative(ExprHandle handle) {
