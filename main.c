@@ -1174,6 +1174,7 @@ main(int argc, char const *argv[]) {
 	while (printf("vJp> "), fgets(str_buf, sizeof str_buf, stdin) == str_buf) {
 		// TODO: emit a warning if there really is any input left.
 		fseek(stdin, 0, SEEK_END);
+		for (char *p = str_buf; *p; p++) if (*p == '\n') { *p = '\0'; break; }
 		res = expr_parse(str_buf);
 		// TODO: check that the expression is parsed entirely with ParserState_is_at_end
 		res = expr_derivative(res);
