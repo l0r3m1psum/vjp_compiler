@@ -266,6 +266,7 @@ expr_graphviz_internal(ExprHandle handle) {
 	}
 }
 
+// https://forum.graphviz.org/t/binary-tree-force-lonely-node-to-be-left-or-right/1159
 static void
 expr_graphviz(ExprHandle handle) {
 	bool ok = expr_write(handle, str_buf_arg0, sizeof str_buf_arg0);
@@ -702,9 +703,12 @@ expr_expose_differentials(ExprHandle handle) {
 		assert(arg1_node->kind == KIND_DIFF);
 		if (expr_get_node(arg1_node->arg1)->name != diff_var_name)
 			panic(ERROR_BAD_DATA);
+#if 0
 		ExprHandle new_arg1 = expr_copy(arg1);
 		// A:dX
 		return expr_make_operator(KIND_INNER, A, new_arg1);
+#endif
+		return A;
 	}
 
 panic:
@@ -1026,6 +1030,9 @@ static ExprHandle
 expr_with_count(ExprHandle handle, uint8_t count) {
 	// NOTE: here I could return expr_make_operand(KIND_CONST, 0) when count == 0
 	// and HANDLE_NULL when handle is HANDLE_NULL.
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_CONST) return expr_copy(handle);
+	if (count == 0) return expr_make_operand(KIND_CONST, 0);
 	return count > 1
 		? expr_make_operator(KIND_MUL,
 			expr_make_operand(KIND_CONST, count),
@@ -1040,20 +1047,18 @@ expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
 
 	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg0, prev, count, append);
 	if (node->kind != KIND_ADD) {
+#if 0
 		assert(node->kind == KIND_INNER);
+#endif
 		uint8_t addend_count = 1;
-		ExprHandle normalized_handle = expr_normalize_addend_internal(node->arg0, &addend_count);
+		ExprHandle normalized_handle = expr_normalize_addend_internal(handle, &addend_count);
 		if (addend_count == 0) {
-			// *count = 0;
 			return;
 		}
 		if (!expr_is_valid(normalized_handle)) {
 			normalized_handle = expr_make_operand(KIND_CONST, addend_count);
 		}
-		ExprHandle new_handle = expr_make_operator(KIND_INNER,
-			normalized_handle,
-			expr_copy(node->arg1)
-		);
+		ExprHandle new_handle = normalized_handle;
 
 		if (expr_structural_equal(new_handle, *prev)) {
 			*count += addend_count;
@@ -1078,12 +1083,9 @@ expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
 
 static ExprHandle
 expr_accumulate(ExprHandle handle) {
-	printf("handle: "), expr_print(handle);
 	if (!expr_is_valid(handle)) {
 		return HANDLE_NULL;
 	}
-	// TODO: add the count to the last element of the left argument of the inner
-	// product.
 	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
 	uint8_t count = 1;
 	expr_accumulate_internal(handle, &prev, &count, &res);
@@ -1097,19 +1099,8 @@ expr_accumulate(ExprHandle handle) {
 		if (expr_is_valid(prev))
 			res = expr_with_count(prev, count);
 		else
-			res = expr_make_operator(KIND_INNER,
-				expr_make_operand(KIND_CONST, 0),
-				expr_make_operator(KIND_DIFF,
-					expr_make_operand(KIND_VAR, diff_var_name),
-					HANDLE_NULL
-				)
-			);
+			res = expr_make_operand(KIND_CONST, 0);
 	}
-	// FIXME: la routine di factoring non è invariante alla parentesizzazione.
-	// TODO: mettere expr_graphviz nel repl di debug...
-	expr_graphviz(handle);
-	expr_graphviz(res);
-	printf("res:    "), expr_print(res);
 	return res;
 }
 
@@ -1137,27 +1128,17 @@ expr_derivative(ExprHandle handle) {
 	V { expr_print(res); expr_stat(res); }
 
 	// TODO: implement sorting.
+	// TODO: mettere expr_graphviz nel repl di debug...
 
+	V printf("Step 4. Accumulation.\n");
 	res = expr_distr(res);
 	res = expr_accumulate(res);
-
-	V printf("Step 4. Factorization.\n");
-	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
 
-	ExprNodeRef node = expr_get_node(res);
-	// A(X):dX
-#if 0
-	assert(
-		node->kind == KIND_INNER
-			? expr_get_node(node->arg1)->kind == KIND_DIFF
-			: node->kind == KIND_NULL
-	);
- #endif
-	res = node->arg0;
-
-	V printf("Result\n");
-	V expr_print(res);
+	V printf("Step 5. Factorization.\n");
+	// FIXME: not invariant to associativity.
+	res = expr_factor(res);
+	V { expr_print(res); expr_stat(res); }
 
 	return res;
 #undef V
@@ -1166,10 +1147,6 @@ expr_derivative(ExprHandle handle) {
 // TODO: write a pool allocator for the nodes, this, by making a new copy every
 // time, is the simplest way handle memory management for now.
 // https://www.gingerbill.org/article/2019/02/16/memory-allocation-strategies-004/
-
-// TODO: print graphviz?
-// https://graphviz.org/Gallery/directed/Genetic_Programming.html
-// https://forum.graphviz.org/t/binary-tree-force-lonely-node-to-be-left-or-right/1159
 
 static bool
 test_derivative(const char *expr, const char *res) {
@@ -1200,8 +1177,7 @@ main(int argc, char const *argv[]) {
 		// TODO: emit a warning if there really is any input left.
 		fseek(stdin, 0, SEEK_END);
 		res = expr_parse(str_buf);
-		// TODO: check that the expression is parsed entirely with
-		// ParserState_is_at_end
+		// TODO: check that the expression is parsed entirely with ParserState_is_at_end
 		res = expr_derivative(res);
 		memset(node_pool, 0, sizeof node_pool);
 		node_pool_watermark = 1;
@@ -1222,6 +1198,8 @@ main(int argc, char const *argv[]) {
 	all_ok &= test_derivative("A:G", "0.I");
 	all_ok &= test_derivative("A:G+A:G", "0.I");
 	all_ok &= test_derivative("G:(10.I+X)", "G");
+	all_ok &= test_derivative("G:(X+X)", "2.I G");
+	all_ok &= test_derivative("G:(A X+A X)", "2.I A G");
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
@@ -1262,21 +1240,15 @@ main(int argc, char const *argv[]) {
 
 	// expr_accumulate(expr_parse("(A C:dX+B A:dX)+(B A:dX+B A:dX)+B:dX+B:dX"));
 	ExprHandle e = expr_parse(
-		"A 5.I B':dX+(A B' 6.I':dX+C 0.I G:dX)+3.I A' 2.I:dX+3.I 4.I W:dX+2.I' 3.I:dX"
+		"A 5.I B'+(A B' 6.I'+C 0.I G)+3.I A' 2.I+3.I 4.I W+2.I' 3.I"
 	);
+	e = expr_accumulate(e);
 	expr_print(e);
-	expr_accumulate(e);
-	// return 0;
 
 	// trace_execution = true;
 	ExprHandle res = HANDLE_NULL;
-	// FIXME: Since we can't factor for constants we can't find the derivarive
-	// of the following two functions.
-	res = expr_parse("G:(X+X)"); expr_print(res); expr_stat(res);
-	res = expr_parse("G:(A X+A X)"); expr_print(res); expr_stat(res);
-	// res = expr_parse("G:(E F (X+B) (C+X))'"); expr_print(res); expr_stat(res);
 	// res = expr_parse("G:(X B+C (X D))"); expr_print(res); expr_stat(res);
-	res = expr_derivative(res); expr_print(res);
+	// res = expr_derivative(res); expr_print(res);
 	return 0;
 #endif
 }
