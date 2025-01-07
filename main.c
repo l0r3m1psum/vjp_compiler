@@ -1196,12 +1196,12 @@ main(int argc, char const *argv[]) {
 	num_bad += !test_derivative("A:G+A:G", "0.I");
 	num_bad += !test_derivative("G:(10.I+X)", "G");
 	num_bad += !test_derivative("G:(X+X)", "2.I G");
-	num_bad += !test_derivative("G:(A X+A X)", "2.I A G");
+	num_bad += !test_derivative("G:(A X+A X)", "2.I A' G");
 	num_bad += !test_derivative(
 		"(A 5.I B'+(A B' 6.I'+C 0.I G)+3.I A' 2.I+3.I 4.I W+2.I' 3.I):X",
 		"11.I A B'+6.I A'+12.I W+6.I");
 	num_bad += !test_derivative("((A C+B A)+(B A+B A)+B+B):X", "A C+3.I B A+2.I B");
-	num_bad += !test_derivative("", ""); // TODO: test parse empty string
+	num_bad += !test_derivative("", "");
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
