@@ -604,6 +604,7 @@ expr_expose_differentials(ExprHandle handle) {
 		assert(arg1_node->kind == KIND_DIFF);
 		if (expr_get_node(arg1_node->arg1)->name != diff_var_name)
 			panic(ERROR_BAD_DATA);
+		// A:dX
 		return A;
 	}
 
@@ -1077,7 +1078,8 @@ expr_print_matrixcalculus_internal(ExprHandle handle) {
 	case KIND_NULL:  assert(false); break; // This shuld never happen...
 	// NOTE: We should allow only upper case letters
 	case KIND_VAR:   printf("%c", node->name); break;
-	case KIND_CONST: printf("%d*", node->val); break;
+	// NOTE: I should be a reserved name.
+	case KIND_CONST: printf("(%d*inv(I)*I)", node->val); break;
 	case KIND_ADD:   printf("+"); break;
 	case KIND_INNER:
 	case KIND_MUL:
@@ -1126,15 +1128,23 @@ expr_derivative(ExprHandle handle) {
 	res = expr_expose_differentials(res);
 	V { expr_print(res); expr_stat(res); }
 
+	/* From this point on, since the expression would have been a summation of
+	 * inner products with dX i.e.
+	 *     A:dX + ... + Z:dX
+	 * all the dX and inner products have been removed so that the resulting
+	 * expression is
+	 *     A + ... + Z
+	 */
+
 	// TODO: implement sorting.
 	// TODO: mettere expr_graphviz nel repl di debug...
 
-	V printf("Step 4. Accumulation.\n");
+	V printf("Step 4. Accumulation;\n");
 	res = expr_distr(res);
 	res = expr_accumulate(res);
 	V { expr_print(res); expr_stat(res); }
 
-	V printf("Step 5. Factorization.\n");
+	V printf("Step 5. Factorization;\n");
 	// FIXME: not invariant to associativity.
 	res = expr_factor(res);
 	V { expr_print(res); expr_stat(res); }
@@ -1203,6 +1213,9 @@ main(int argc, char const *argv[]) {
 		"11.I A B'+6.I A'+12.I W+6.I");
 	num_bad += !test_derivative("((A C+B A)+(B A+B A)+B+B):X", "A C+3.I B A+2.I B");
 	num_bad += !test_derivative("", "");
+	num_bad += !test_derivative("X:X", "2.I X");
+	num_bad += !test_derivative("X:X X", "X (X+X')+X' X"); // We are better than matrixcalculus
+	num_bad += !test_derivative("G:((C+X) G E F+G E F (X+B))", "G (G E F)'+(G E F)' G"); // We can do better than matrixcalculus
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
@@ -1220,8 +1233,6 @@ main(int argc, char const *argv[]) {
 	// due espressioni sintatticamente diverse!
 	// tr(G'*(X+6*inv(I)*I)*(X-5*inv(I)*I))
 	// tr(G'*(X*X + 6*inv(I)*I*X - X*5*inv(I)*I - 30*inv(I)*I))
-	// Un altro caso:
-	// tr(G'*((C+X)*G*E*F+G*E*F*(X+B))')
 	// Matrixcalculus supports fractions but it does not do simplifications
 	// tr(G'*(matrix(5.5)+X))
 
