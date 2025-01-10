@@ -294,6 +294,8 @@ expr_copy(ExprHandle handle) {
 	return expr_make_node(node->kind, node->name, arg0_copy, arg1_copy);
 }
 
+/******************************************************************************/
+
 static ExprHandle
 expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -372,24 +374,6 @@ expr_differentiate_internal(ExprHandle handle, bool *req_grad) {
 	}
 
 	panic(ERROR_BAD_DATA);
-}
-
-static ExprHandle
-expr_differentiate(ExprHandle handle) {
-	bool req_grad = true;
-	ExprHandle res = expr_differentiate_internal(handle, &req_grad);
-	if (!expr_is_valid(res)) {
-		// Instead of returning just 0.I we return 0.I:dX because in this way
-		// expr_expose_differentials and other functions can be left unchanged.
-		res = expr_make_operator(KIND_INNER,
-			expr_make_operand(KIND_CONST, 0),
-			expr_make_operator(KIND_DIFF,
-				expr_make_operand(KIND_VAR, diff_var_name),
-				HANDLE_NULL
-			)
-		);
-	}
-	return res;
 }
 
 // NOTE: this function could distribute differentials but we would then need to
@@ -700,26 +684,7 @@ expr_accumulate_internal(ExprHandle handle, ExprHandle *prev, uint8_t *count,
 	if (node->kind == KIND_ADD) expr_accumulate_internal(node->arg1, prev, count, append);
 }
 
-static ExprHandle
-expr_accumulate(ExprHandle handle) {
-	if (!expr_is_valid(handle)) {
-		return HANDLE_NULL;
-	}
-	ExprHandle prev = HANDLE_NULL, res = HANDLE_NULL;
-	uint8_t count = 1;
-	expr_accumulate_internal(handle, &prev, &count, &res);
-	if (expr_is_valid(res)) {
-		assert(expr_is_valid(prev));
-		res = expr_make_operator(KIND_ADD,
-			res,
-			expr_with_count(prev, count)
-		);
-	} else {
-		res = expr_with_count(prev, count);
-	}
-	return res;
-}
-
+// Best effort factoring, it does not support integer factoring.
 static ExprHandle
 expr_factor_internal(ExprHandle handle, bool *changed) {
 	ExprNodeRef node = expr_get_node(handle);
@@ -792,21 +757,6 @@ expr_factor_internal(ExprHandle handle, bool *changed) {
 		expr_factor_internal(node->arg0, changed),
 		expr_factor_internal(node->arg1, changed)
 	);
-}
-
-// Best effort factoring, it does not support integer factoring.
-static ExprHandle
-expr_factor(ExprHandle handle) {
-	bool changed = true;
-	ExprHandle res = HANDLE_NULL, old_res = handle;
-	while (changed) {
-		changed = false;
-		res = expr_factor_internal(old_res, &changed);
-		if (trace_execution) printf("\t"), expr_print(res);
-		// TODO: free old_res
-		old_res = res;
-	}
-	return res;
 }
 
 /* Parser *********************************************************************/
@@ -1117,7 +1067,20 @@ expr_derivative(ExprHandle handle) {
 	V expr_print_matrixcalculus(res);
 
 	V printf("Step 1. Differential application;\n");
-	res = expr_differentiate(res);
+	{
+		bool req_grad = true;
+		res = expr_differentiate_internal(handle, &req_grad);
+		if (!expr_is_valid(res)) {
+			// 0.I:dX for expr_expose_differentials
+			res = expr_make_operator(KIND_INNER,
+				expr_make_operand(KIND_CONST, 0),
+				expr_make_operator(KIND_DIFF,
+					expr_make_operand(KIND_VAR, diff_var_name),
+					HANDLE_NULL
+				)
+			);
+		}
+	}
 	V { expr_print(res); expr_stat(res); }
 
 	V printf("Step 2. Distribution;\n");
@@ -1126,6 +1089,7 @@ expr_derivative(ExprHandle handle) {
 
 	V printf("Step 3. Bring out differentials;\n");
 	res = expr_expose_differentials(res);
+	res = expr_distr(res);
 	V { expr_print(res); expr_stat(res); }
 
 	/* From this point on, since the expression would have been a summation of
@@ -1137,16 +1101,37 @@ expr_derivative(ExprHandle handle) {
 	 */
 
 	// TODO: implement sorting.
-	// TODO: mettere expr_graphviz nel repl di debug...
 
 	V printf("Step 4. Accumulation;\n");
-	res = expr_distr(res);
-	res = expr_accumulate(res);
+	{
+		ExprHandle prev = HANDLE_NULL, append = HANDLE_NULL;
+		uint8_t count = 1;
+		expr_accumulate_internal(res, &prev, &count, &append);
+		if (expr_is_valid(append)) {
+			assert(expr_is_valid(prev));
+			res = expr_make_operator(KIND_ADD,
+				append,
+				expr_with_count(prev, count)
+			);
+		} else {
+			res = expr_with_count(prev, count);
+		}
+	}
 	V { expr_print(res); expr_stat(res); }
 
 	V printf("Step 5. Factorization;\n");
 	// FIXME: not invariant to associativity.
-	res = expr_factor(res);
+	{
+		bool changed = true;
+		ExprHandle old_res = res;
+		while (changed) {
+			changed = false;
+			res = expr_factor_internal(old_res, &changed);
+			if (trace_execution) printf("\t"), expr_print(res);
+			// TODO: free old_res
+			old_res = res;
+		}
+	}
 	V { expr_print(res); expr_stat(res); }
 
 	return res;
