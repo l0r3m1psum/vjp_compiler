@@ -22,6 +22,9 @@ only for CLR stuff, for native code this is still the way to go.
 
 https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/reference/ieevisualizerservice-getcustomviewerlist
 https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/visualizing-and-viewing-data
+
+https://learn.microsoft.com/en-us/dotnet/api/microsoft.visualstudio.debugger.componentinterfaces.idkmcustomvisualizer
+https://github.com/microsoft/ConcordExtensibilitySamples/blob/main/CppCustomVisualizer/dll/_EntryPoint.cpp
 -->
 <AutoVisualizer
   xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
