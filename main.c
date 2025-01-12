@@ -530,7 +530,11 @@ expr_has_differential(ExprHandle handle) {
 		|| expr_has_differential(node->arg1);
 }
 
-// TODO: use the DFS trick to avoid having to call expr_has_differential.
+// TODO: to make this function take linear time the procedure can be implemented
+// by traversing the tree like expr_accumulate_internal the sub-trees rooted at
+// the inner products and entering in "shift mode" when surpassing passing the
+// inner product. dX can just be "skipped" if it is on the right of the inner
+// product but what about when it is on the left?
 static ExprHandle
 expr_expose_differentials(ExprHandle handle) {
 	ExprNodeRef node = expr_get_node(handle);
