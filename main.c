@@ -967,6 +967,40 @@ expr_graphviz(ExprHandle handle) {
 }
 
 static void
+expr_stat2_internal(ExprHandle handle, uint16_t *non_scalar_mul, uint16_t *scalar_mul, bool *was_scalar_mul) {
+	ExprNodeRef node = expr_get_node(handle);
+	if (node->kind == KIND_NULL
+		|| node->kind == KIND_VAR
+		|| node->kind == KIND_CONST) {
+		*was_scalar_mul = false;
+		return;
+	}
+
+	bool was_scalar_mul_arg0 = false, was_scalar_mul_arg1 = false;
+	expr_stat2_internal(node->arg0, non_scalar_mul, scalar_mul, &was_scalar_mul_arg0);
+	expr_stat2_internal(node->arg1, non_scalar_mul, scalar_mul, &was_scalar_mul_arg1);
+
+	if (node->kind == KIND_MUL) {
+		if (expr_get_node(node->arg0)->kind == KIND_CONST
+			|| expr_get_node(node->arg1)->kind == KIND_CONST
+			|| was_scalar_mul_arg0
+			|| was_scalar_mul_arg1) {
+			*was_scalar_mul = true;
+			(*scalar_mul)++;
+		} else {
+			(*non_scalar_mul)++;
+		}
+	}
+}
+
+expr_stat2(ExprHandle handle) {
+	uint16_t non_scalar_mul = 0, scalar_mul = 0;
+	bool was_scalar_mul = false;
+	expr_stat2_internal(handle, &non_scalar_mul, &scalar_mul, &was_scalar_mul);
+	printf("#non-scalar_mul=%d #scalar_mul=%d\n", non_scalar_mul, scalar_mul);
+}
+
+static void
 expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operand_count) {
 	ExprNodeRef node = expr_get_node(handle);
 	CHECK_KIND(8);
@@ -997,6 +1031,8 @@ expr_stat_internal(ExprHandle handle, uint16_t *operator_count, uint16_t *operan
 	return;
 }
 
+// TODO: count scalar and non-scalar multiplications, non-scalar multiplications
+// have to be minimized.
 static void
 expr_stat(ExprHandle handle) {
 	uint16_t operator_count = 0, operand_count = 0;
@@ -1152,7 +1188,7 @@ test_derivative(const char *expr, const char *res) {
 	ExprHandle rhs = expr_parse(res);
 	bool ok = expr_structural_equal(lhs, rhs);
 	if (!ok) {
-		printf("Derivative of %s is not %s but is ", expr, res), expr_print(lhs);
+		printf("Derivative of %s (w.r.t. %c) is not %s but is ", expr, diff_var_name, res), expr_print(lhs);
 	}
 	return ok;
 }
@@ -1205,6 +1241,14 @@ main(int argc, char const *argv[]) {
 	num_bad += !test_derivative("X:X", "2.I X");
 	num_bad += !test_derivative("X:X X", "X (X+X')+X' X"); // We are better than matrixcalculus
 	num_bad += !test_derivative("G:((C+X) G E F+G E F (X+B))", "G (G E F)'+(G E F)' G"); // We can do better than matrixcalculus
+	num_bad += !test_derivative("(A B+B):X", "(A+1.I) B"); // NOTE: does it make sense to do it like this?
+	diff_var_name = 'A';
+	num_bad += !test_derivative(
+		"(4.I+X+2.I X Y+2.I X X Y+X X Y Y):A",
+		"4.I+X+(2.I X+X (2.I X+X Y))Y" // This minimizes the number of non-scalar multiplications
+		//"4.I+X+X (2.I Y+X (2.I Y+Y Y))"
+	); // We can do better than matrixcalculus
+	diff_var_name = 'X';
 	// TODO: testing for errors now is not really possible. To make it feasible
 	// "error nodes" should be pre allocated in the node_pool and make them
 	// point to themselves, in this way any self pointg node is considered as a
@@ -1217,6 +1261,11 @@ main(int argc, char const *argv[]) {
 	return num_bad;
 #else
 	printf("sizeof (ExprNode) = %zu\n", sizeof (ExprNode));
+
+	expr_stat2(expr_parse("4.I+X+(2.I X+X (2.I X+X Y))Y"));
+	expr_stat2(expr_parse("4.I+X+X (2.I Y+X (2.I Y+Y Y))"));
+	expr_stat2(expr_parse("(1.I 2.I) (3.I 4.I)"));
+	expr_stat2(expr_parse("(1.I 2.I) (3.I X)"));
 
 	// Queste due espressioni sono equivalenti ma www.matrixcalculus.org ritorna
 	// due espressioni sintatticamente diverse!
