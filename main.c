@@ -897,6 +897,7 @@ Grammar_primary(ParserState *state) {
 	panic(ERROR_BAD_DATA);
 }
 
+// FIXME: bisogna controllare di aver parsato l'intera stringa... (la parte finale)
 static ExprHandle
 expr_parse(const char *expr) {
 	ParserState state = {.tokens = expr, .lentgh = strlen(expr)};
@@ -1220,6 +1221,7 @@ main(int argc, char const *argv[]) {
 		res = expr_parse(str_buf);
 		// TODO: check that the expression is parsed entirely with ParserState_is_at_end
 		res = expr_derivative(res);
+		expr_print(res);
 		memset(node_pool, 0, sizeof node_pool);
 		node_pool_watermark = 1;
 	}
@@ -1247,12 +1249,13 @@ main(int argc, char const *argv[]) {
 	num_bad += !test_derivative("", "");
 	num_bad += !test_derivative("X:X", "2.I X");
 	num_bad += !test_derivative("X:X X", "X (X+X')+X' X"); // We are better than matrixcalculus
-	num_bad += !test_derivative("G:((C+X) G E F+G E F (X+B))", "G (G E F)'+(G E F)' G"); // We can do better than matrixcalculus
+	num_bad += !test_derivative("G:((C+X) G E F+G E F (X+B))",
+		"G (G E F)'+(G E F)' G"); // We can do better than matrixcalculus
 	num_bad += !test_derivative("(A B+B):X", "A B+B"); // (A+1.I) B would not decrease non-scalar multiplications
 	diff_var_name = 'A';
 	num_bad += !test_derivative(
 		"(4.I+X+2.I X Y+2.I X X Y+X X Y Y):A",
-		"4.I+X+(2.I X+X (2.I X+X Y))Y" // This minimizes the number of non-scalar multiplications
+		"4.I+X+(2.I X+X (2.I X+X Y)) Y" // This minimizes the number of non-scalar multiplications
 		//"4.I+X+X (2.I Y+X (2.I Y+Y Y))"
 	); // We can do better than matrixcalculus
 	diff_var_name = 'X';
