@@ -25,6 +25,9 @@ https://learn.microsoft.com/en-us/visualstudio/extensibility/debugger/visualizin
 
 https://learn.microsoft.com/en-us/dotnet/api/microsoft.visualstudio.debugger.componentinterfaces.idkmcustomvisualizer
 https://github.com/microsoft/ConcordExtensibilitySamples/blob/main/CppCustomVisualizer/dll/_EntryPoint.cpp
+
+The way to do it using COM objects from C++ as Microsoft does it:
+https://github.com/microsoft/cppwinrt/tree/46fd3ed1ce7b2264fcdef8199794828094dfcd88/natvis
 -->
 <AutoVisualizer
   xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
