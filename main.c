@@ -1001,6 +1001,7 @@ expr_stat2_internal(ExprHandle handle, uint16_t *non_scalar_mul, uint16_t *scala
 	}
 }
 
+static void
 expr_stat2(ExprHandle handle) {
 	uint16_t non_scalar_mul = 0, scalar_mul = 0;
 	bool was_scalar_mul = false;
