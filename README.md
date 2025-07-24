@@ -1,8 +1,7 @@
 # Deriving "vector-Jacobian" products with matrix calculus
 
-This repository contains the result of my master thesis: my implementation of
-symbolic *matrix calculus*, in particular the the special case of functions of
-matrix input and scalar output.
+This repository contains my implementation of symbolic *matrix calculus*, in
+particular the the special case of functions of matrix input and scalar output.
 
 To understand why this family of functions is important consider the following
 expression *G:F(X)* where *G* and *X* are matrices, *F* a function of matrix
